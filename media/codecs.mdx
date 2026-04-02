@@ -1,0 +1,161 @@
+---
+title: 'Codecs'
+description: 'Configure video and audio codecs, encoder profiles, bitrate, and hardware versus software encoding.'
+keywords: ['codec', 'H264', 'H265', 'AV1', 'AAC', 'G711', 'OPUS', 'bitrate', 'hardware encoding', 'software encoding']
+---
+
+RootEncoder exposes codec selection through two enums — `VideoCodec` and `AudioCodec` — and applies them through `setVideoCodec()` and `setAudioCodec()` on your stream instance. Detailed encoding parameters are set through `prepareVideo()` and `prepareAudio()`.
+
+## Video codecs
+
+| Codec | Enum value | Min API | Notes |
+|-------|-----------|---------|-------|
+| H.264 (AVC) | `VideoCodec.H264` | 21 | Default. Widest device and server support. |
+| H.265 (HEVC) | `VideoCodec.H265` | 21 | ~50% better compression than H.264 at equal quality. |
+| AV1 | `VideoCodec.AV1` | 29 | Royalty-free. Best compression ratio; limited hardware encoder availability. |
+
+## Audio codecs
+
+| Codec | Enum value | Min API | Notes |
+|-------|-----------|---------|-------|
+| AAC-LC | `AudioCodec.AAC` | 21 | Default. Supported by all protocols. |
+| G.711 | `AudioCodec.G711` | 21 | Low-complexity PCM codec. RTMP and RTSP only. Not supported by SRT or UDP. |
+| OPUS | `AudioCodec.OPUS` | 21 | High-quality at low bitrates. Supported by all four protocols (enhanced RTMP for RTMP). |
+
+<Note>
+When streaming over RTMP, H.265 and AV1 use the **enhanced RTMP** specification. Confirm your media server supports enhanced RTMP before using these codecs with RTMP endpoints. H.264 works with the original RTMP specification.
+</Note>
+
+---
+
+## Setting codecs
+
+Call `setVideoCodec()` and `setAudioCodec()` before calling `prepareVideo()` and `prepareAudio()`. Changing the codec after preparation requires stopping and restarting the stream.
+
+```kotlin
+rtmpStream.setVideoCodec(VideoCodec.H265)
+rtmpStream.setAudioCodec(AudioCodec.OPUS)
+
+rtmpStream.prepareVideo(1280, 720, 2_000_000)
+rtmpStream.prepareAudio(44100, true, 128_000)
+```
+
+---
+
+## prepareVideo() parameters
+
+```kotlin
+fun prepareVideo(
+  width: Int,                  // Output width in pixels
+  height: Int,                 // Output height in pixels
+  bitrate: Int,                // Video bitrate in bits per second
+  fps: Int = 30,               // Target frame rate
+  iFrameInterval: Int = 2,     // Keyframe interval in seconds
+  rotation: Int = 0,           // Clockwise rotation: 0, 90, 180, or 270
+  profile: Int = -1,           // MediaCodecInfo.CodecProfileLevel profile constant (-1 = auto)
+  level: Int = -1              // MediaCodecInfo.CodecProfileLevel level constant (-1 = auto)
+): Boolean
+```
+
+Example with an explicit H.265 profile:
+
+```kotlin
+rtmpStream.setVideoCodec(VideoCodec.H265)
+
+rtmpStream.prepareVideo(
+  width = 1920,
+  height = 1080,
+  bitrate = 4_000_000,
+  fps = 30,
+  iFrameInterval = 2,
+  rotation = 0,
+  profile = MediaCodecInfo.CodecProfileLevel.HEVCProfileMain,
+  level = MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel4
+)
+```
+
+---
+
+## prepareAudio() parameters
+
+```kotlin
+fun prepareAudio(
+  sampleRate: Int,              // e.g. 44100 or 48000
+  isStereo: Boolean,            // true for stereo, false for mono
+  bitrate: Int,                 // Audio bitrate in bits per second
+  echoCanceler: Boolean = false, // Enable hardware echo cancellation
+  noiseSuppressor: Boolean = false // Enable hardware noise suppression
+): Boolean
+```
+
+```kotlin
+rtmpStream.prepareAudio(
+  sampleRate = 44100,
+  isStereo = true,
+  bitrate = 128_000,
+  echoCanceler = true,
+  noiseSuppressor = true
+)
+```
+
+---
+
+## Dynamic bitrate adjustment
+
+You can change the video bitrate at any point during an active stream without interrupting it. This is useful for adapting to network conditions in real time:
+
+```kotlin
+// Reduce bitrate when network degrades
+rtmpStream.setVideoBitrateOnFly(500_000)
+
+// Restore when conditions improve
+rtmpStream.setVideoBitrateOnFly(2_000_000)
+```
+
+---
+
+## Hardware vs. software encoding
+
+By default, RootEncoder picks the first compatible encoder for the selected codec, which is usually the hardware encoder. Use `forceCodecType()` to override this selection:
+
+```kotlin
+import com.pedro.encoder.utils.CodecUtil
+
+rtmpStream.forceCodecType(
+  codecTypeVideo = CodecUtil.CodecType.HARDWARE,
+  codecTypeAudio = CodecUtil.CodecType.HARDWARE
+)
+
+// Force software encoding for both (higher CPU usage, more predictable output)
+rtmpStream.forceCodecType(
+  codecTypeVideo = CodecUtil.CodecType.SOFTWARE,
+  codecTypeAudio = CodecUtil.CodecType.SOFTWARE
+)
+
+// Let the library decide (default)
+rtmpStream.forceCodecType(
+  codecTypeVideo = CodecUtil.CodecType.FIRST_COMPATIBLE_FOUND,
+  codecTypeAudio = CodecUtil.CodecType.FIRST_COMPATIBLE_FOUND
+)
+```
+
+<Tip>
+Call `forceCodecType()` before `prepareVideo()` and `prepareAudio()`. Changing it after preparation has no effect until the encoders are restarted.
+</Tip>
+
+---
+
+## Codec support by protocol
+
+| Codec | RTMP | RTSP | SRT | UDP |
+|-------|------|------|-----|-----|
+| H.264 | Yes | Yes | Yes | Yes |
+| H.265 | Yes (enhanced RTMP) | Yes | Yes | Yes |
+| AV1 | Yes (enhanced RTMP) | Yes | No | No |
+| AAC | Yes | Yes | Yes | Yes |
+| G.711 | Yes | Yes | No | No |
+| OPUS | Yes (enhanced RTMP) | Yes | Yes | Yes |
+
+<Note>
+AV1 is not supported over SRT or UDP — using `VideoCodec.AV1` with `SrtStream` or `UdpStream` throws `IllegalArgumentException`. G.711 is not supported over SRT or UDP.
+</Note>

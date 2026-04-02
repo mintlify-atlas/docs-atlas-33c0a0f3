@@ -1,0 +1,286 @@
+---
+title: "Troubleshooting"
+description: "Solutions for common issues when streaming with RootEncoder."
+---
+
+<Note>
+Always check **Logcat** first. Filter by `RootEncoder` or the tag of the specific protocol class (e.g. `RtmpClient`, `RtspClient`, `SrtClient`). Most errors surface there with descriptive messages before they reach your `ConnectChecker` callbacks.
+
+Enable verbose protocol logs programmatically:
+
+```kotlin
+genericStream.getStreamClient().setLogs(true)
+```
+</Note>
+
+<AccordionGroup>
+  <Accordion title="Stream fails to connect">
+    **Symptoms:** `onConnectionFailed()` fires immediately or after a short timeout. The stream never reaches `onConnectionSuccess()`.
+
+    **Common causes and fixes:**
+
+    1. **Wrong URL format.** Verify the scheme matches the protocol you intend to use:
+       - RTMP: `rtmp://host:1935/app/streamKey`
+       - RTMPS: `rtmps://host:443/app/streamKey`
+       - RTSP: `rtsp://host:554/path`
+       - SRT: `srt://host:9000?streamid=myStream`
+
+    2. **Server not reachable.** Test the endpoint from the device using `ping` or a browser, and confirm the server is running and accepting connections on the expected port.
+
+    3. **Firewall or NAT.** Ensure the server port is open. RTMP uses `1935/TCP`, RTSP uses `554/TCP`, and SRT uses UDP.
+
+    4. **Authentication required.** If the server expects credentials, pass them before connecting:
+       ```kotlin
+       genericStream.getStreamClient().setAuthorization("username", "password")
+       ```
+
+    5. **Enable logs** to see the exact error returned by the server:
+       ```kotlin
+       genericStream.getStreamClient().setLogs(true)
+       ```
+  </Accordion>
+
+  <Accordion title="Poor video quality or pixelation">
+    **Symptoms:** The stream looks blocky, blurry, or shows visible compression artefacts, especially during motion.
+
+    **Fixes:**
+
+    1. **Increase the video bitrate.** A common starting point is 1–2 Mbps for 720p at 30 fps. Increase until the artefacts disappear:
+       ```kotlin
+       genericStream.prepareVideo(1280, 720, bitrate = 2_500_000, fps = 30)
+       ```
+       You can also raise it on the fly without restarting the stream:
+       ```kotlin
+       genericStream.setVideoBitrateOnFly(2_500_000)
+       ```
+
+    2. **Prefer hardware encoding.** Software encoders are significantly slower and produce worse quality at the same bitrate. Force hardware encoding:
+       ```kotlin
+       import com.pedro.encoder.utils.CodecUtil
+       genericStream.forceCodecType(CodecUtil.CodecType.HARDWARE, CodecUtil.CodecType.HARDWARE)
+       ```
+
+    3. **Lower the I-frame interval.** A smaller `iFrameInterval` value means keyframes appear more often, which helps quality during motion at the cost of slightly higher bitrate:
+       ```kotlin
+       genericStream.prepareVideo(1280, 720, bitrate = 2_000_000, iFrameInterval = 1)
+       ```
+  </Accordion>
+
+  <Accordion title="Audio and video are out of sync">
+    **Symptoms:** The audio leads or lags behind the video by a noticeable amount.
+
+    **Fixes:**
+
+    1. **Match the sample rate to the device capability.** Mismatched sample rates cause the audio encoder to resample, introducing drift. Common safe values are `44100` and `32000`:
+       ```kotlin
+       genericStream.prepareAudio(sampleRate = 44100, isStereo = true, bitrate = 128_000)
+       ```
+
+    2. **Avoid `Media3AudioSource` sample rate mismatch.** If you use `Media3AudioSource`, the `sampleRate` and `isStereo` values passed to `prepareAudio()` **must** exactly match the media file's audio track. The source throws `IllegalArgumentException` if they differ.
+
+    3. **Use clock-based timestamps (default).** The default `TimestampMode.CLOCK` produces the best sync in most cases. Avoid switching timestamp modes unless you have a specific reason:
+       ```kotlin
+       import com.pedro.encoder.TimestampMode
+       genericStream.setTimestampMode(TimestampMode.CLOCK, TimestampMode.CLOCK)
+       ```
+  </Accordion>
+
+  <Accordion title="High latency">
+    **Symptoms:** There is a multi-second delay between what happens in front of the camera and what viewers see.
+
+    **Fixes:**
+
+    1. **Reduce the send cache size.** A large cache introduces buffering delay. Start small and increase only if you see dropped frames:
+       ```kotlin
+       genericStream.getStreamClient().resizeCache(1 * 1024 * 1024) // 1 MB
+       ```
+
+    2. **Use SRT instead of RTMP.** SRT is designed for low-latency streaming and handles packet loss more gracefully than RTMP without introducing large buffers.
+
+    3. **Lower the stream delay.** If you called `setDelay()`, reduce or remove it:
+       ```kotlin
+       genericStream.getStreamClient().setDelay(0L) // no artificial delay
+       ```
+
+    4. **Tune the I-frame interval.** Shorter intervals (`iFrameInterval = 1`) reduce the time a player needs to start decoding after joining the stream.
+  </Accordion>
+
+  <Accordion title="Device gets hot during streaming">
+    **Symptoms:** The device becomes warm or throttles performance during extended streaming sessions.
+
+    **Fixes:**
+
+    1. **Lower the resolution and bitrate.** Encoding at 1080p at 60 fps is significantly more demanding than 720p at 30 fps. Use the lowest settings that satisfy your quality requirements.
+
+    2. **Prefer hardware encoding.** The CPU usage from software encoding generates far more heat than offloading to the device's media encoder chip:
+       ```kotlin
+       import com.pedro.encoder.utils.CodecUtil
+       genericStream.forceCodecType(CodecUtil.CodecType.HARDWARE, CodecUtil.CodecType.HARDWARE)
+       ```
+
+    3. **Reduce the frame rate.** Dropping from 30 fps to 24 fps has a noticeable impact on encoding load with minimal visible difference for most content:
+       ```kotlin
+       genericStream.prepareVideo(1280, 720, bitrate = 1_500_000, fps = 24)
+       ```
+  </Accordion>
+
+  <Accordion title="prepareVideo() returns false">
+    **Symptoms:** `prepareVideo()` returns `false` or throws `IllegalArgumentException`, and the stream never starts.
+
+    **Fixes:**
+
+    1. **The video source does not support the requested parameters.** Not all devices support every resolution and frame rate combination. Try a standard resolution such as `640×480` or `1280×720` first, then narrow down the cause.
+
+    2. **The encoder does not support the requested codec.** H.265 and AV1 are not available on all devices. Check codec availability:
+       ```kotlin
+       import com.pedro.encoder.utils.CodecUtil
+       val h265Encoders = CodecUtil.getAllHardwareEncoders(CodecUtil.H265_MIME)
+       if (h265Encoders.isEmpty()) {
+           // Fall back to H.264
+           genericStream.setVideoCodec(com.pedro.common.VideoCodec.H264)
+       }
+       ```
+
+    3. **Stream, record, or preview is already running.** `prepareVideo()` throws `IllegalStateException` if you call it while any of these are active. Call `release()` first:
+       ```kotlin
+       genericStream.release()
+       genericStream.prepareVideo(...)
+       ```
+
+    4. **Catch the exception** to get a descriptive error message:
+       ```kotlin
+       val prepared = try {
+           genericStream.prepareVideo(width, height, bitrate, rotation = rotation)
+       } catch (e: IllegalArgumentException) {
+           Log.e("Stream", "prepareVideo failed: ${e.message}")
+           false
+       }
+       ```
+  </Accordion>
+
+  <Accordion title="Black screen on preview">
+    **Symptoms:** The preview `SurfaceView` or `TextureView` is completely black. The stream may or may not be active.
+
+    **Fixes:**
+
+    1. **Call `startPreview()` only after the surface is ready.** The `Surface` must be valid before you pass it to `startPreview()`. The safest place to call it is inside `SurfaceHolder.Callback.surfaceCreated()` or after checking `TextureView.isAvailable`:
+       ```kotlin
+       surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
+           override fun surfaceCreated(holder: SurfaceHolder) {
+               if (!genericStream.isOnPreview) genericStream.startPreview(surfaceView)
+           }
+           override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
+           override fun surfaceDestroyed(holder: SurfaceHolder) {
+               if (genericStream.isOnPreview) genericStream.stopPreview()
+           }
+       })
+       ```
+
+    2. **Call `prepareVideo()` before `startPreview()`.** Preview requires the encoder and GL pipeline to be initialised.
+
+    3. **Check that the video source is not `NoVideoSource`.** If you started with `NoVideoSource()` (for example for screen streaming before the `MediaProjection` token arrives), the preview will be blank until you call `changeVideoSource()` with a real camera source.
+  </Accordion>
+
+  <Accordion title="Recording fails to start or produces no file">
+    **Symptoms:** `startRecord()` throws an exception or the output file is empty / missing after `stopRecord()`.
+
+    **Fixes:**
+
+    1. **Check the `WRITE_EXTERNAL_STORAGE` permission** on API 28 and below, or verify that your target directory is within app-scoped storage (no permission needed on API 29+).
+
+    2. **Verify available disk space** before starting a recording session, especially for long streams.
+
+    3. **Ensure `prepareVideo()` and `prepareAudio()` succeeded** before calling `startRecord()`. Both return `false` on failure.
+
+    4. **Listen for recording status** to detect errors early:
+       ```kotlin
+       genericStream.startRecord(path) { status ->
+           when (status) {
+               RecordController.Status.RECORDING -> Log.i("Record", "Recording started")
+               RecordController.Status.STOPPED   -> Log.i("Record", "Recording stopped")
+               else -> {}
+           }
+       }
+       ```
+
+    5. **Use a fully qualified absolute path.** Relative paths and paths that the app does not have write access to will cause silent failures.
+  </Accordion>
+
+  <Accordion title="H.265 (HEVC) not working on some servers">
+    **Symptoms:** The stream connects successfully but the server rejects it, the player cannot decode it, or the video appears corrupted when using `VideoCodec.H265`.
+
+    **Fixes:**
+
+    1. **Confirm server support.** H.265 over RTMP requires the **Enhanced RTMP** specification (also called RTMP E). Older Nginx-RTMP and many CDN ingest points only support H.264. Check your server's documentation.
+
+    2. **Check player support.** Browser-based HLS/DASH players may not have H.265 hardware decode. Test with VLC or a native player first.
+
+    3. **Fall back to H.264** if the server does not support enhanced RTMP:
+       ```kotlin
+       genericStream.setVideoCodec(com.pedro.common.VideoCodec.H264)
+       ```
+
+    4. **AV1 is not supported over SRT.** If you switch to `VideoCodec.AV1` while using `SrtStream`, the stream will fail. Stick to H.264 or H.265 for SRT.
+  </Accordion>
+
+  <Accordion title="Stream disconnects frequently">
+    **Symptoms:** `onDisconnect()` or `onConnectionFailed()` fires repeatedly during what should be a stable stream.
+
+    **Use automatic reconnection with `setReTries()` and `reTry()`:**
+
+    ```kotlin
+    // Allow up to 10 reconnect attempts
+    genericStream.getStreamClient().setReTries(10)
+    ```
+
+    In your `ConnectChecker.onConnectionFailed()` callback:
+
+    ```kotlin
+    override fun onConnectionFailed(reason: String) {
+        // Try to reconnect with a 5-second delay
+        val retrying = genericStream.getStreamClient().reTry(5000L, reason)
+        if (!retrying) {
+            // All retry attempts exhausted
+            genericStream.stopStream()
+            updateUi()
+        }
+    }
+    ```
+
+    To fall over to a backup ingest URL after a failure:
+
+    ```kotlin
+    override fun onConnectionFailed(reason: String) {
+        val retrying = genericStream.getStreamClient().reTry(
+            delay = 3000L,
+            reason = reason,
+            backupUrl = "rtmp://backup-server/live/key"
+        )
+        if (!retrying) genericStream.stopStream()
+    }
+    ```
+
+    **Detect dead connections proactively** with `setCheckServerAlive()`. This sends periodic keep-alive probes and fires `onConnectionFailed()` if the server stops responding:
+
+    ```kotlin
+    genericStream.getStreamClient().setCheckServerAlive(true)
+    ```
+
+    **Other causes to investigate:**
+
+    - Network roaming or Wi-Fi hand-off dropping the TCP/UDP socket.
+    - Server-side session timeouts — check the server's idle timeout setting.
+    - Encoder errors causing a corrupted bitstream — set a `CodecErrorCallback` to catch these:
+      ```kotlin
+      import com.pedro.encoder.CodecErrorCallback
+      import com.pedro.encoder.utils.CodecUtil.CodecTypeError
+      import android.media.MediaCodec
+
+      genericStream.setEncoderErrorCallback(object : CodecErrorCallback {
+          override fun onCodecError(type: CodecTypeError, e: MediaCodec.CodecException) {
+              Log.e("Encoder", "Codec error [$type]: ${e.message}")
+          }
+      })
+      ```
+  </Accordion>
+</AccordionGroup>

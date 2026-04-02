@@ -1,0 +1,211 @@
+---
+title: "Audio Effects"
+description: "Process and modify PCM audio data in real time using built-in effects or a custom effect pipeline."
+---
+
+RootEncoder's audio effect system operates directly on the raw PCM buffers captured from the microphone, before the audio is handed to the encoder. Effects run on a background thread separate from encoding, so applying an effect does not stall the codec pipeline.
+
+## Effect types
+
+There are two distinct layers of audio processing available:
+
+| Layer | API | When to use |
+|---|---|---|
+| **Custom effect** | `CustomAudioEffect` subclass | Modify PCM samples for volume, amplitude metering, DSP effects |
+| **Post-process effects** | `AudioPostProcessEffect` | Hardware echo cancellation, noise suppression, automatic gain control |
+
+## CustomAudioEffect
+
+`CustomAudioEffect` is the base class for all sample-level processing. Subclass it and implement `process()`.
+
+```kotlin
+abstract class CustomAudioEffect {
+    /**
+     * @param pcmBuffer buffer obtained directly from the microphone.
+     * @return must be the same size as pcmBuffer.
+     */
+    abstract fun process(pcmBuffer: ByteArray): ByteArray
+}
+```
+
+Apply your effect to any stream's audio source:
+
+```kotlin
+audioSource.setAudioEffect(myEffect)
+```
+
+<Warning>
+The returned `ByteArray` from `process()` must be exactly the same length as the input `pcmBuffer`. Returning a differently-sized buffer will corrupt the audio stream.
+</Warning>
+
+## VolumeEffect
+
+`VolumeEffect` scales the amplitude of every sample by a multiplier.
+
+```kotlin
+class VolumeEffect : CustomAudioEffect() {
+    var volume = 1f  // 1.0 = original, >1 amplifies, <1 attenuates
+
+    override fun process(pcmBuffer: ByteArray): ByteArray
+}
+```
+
+### Usage
+
+```kotlin
+import com.pedro.encoder.input.audio.VolumeEffect
+
+val volumeEffect = VolumeEffect()
+volumeEffect.volume = 1.5f  // 50% louder than the original capture
+
+audioSource.setAudioEffect(volumeEffect)
+```
+
+You can change the `volume` property at any time while streaming — the next buffer will use the new value.
+
+```kotlin
+// Mute the microphone while keeping the stream open
+volumeEffect.volume = 0f
+
+// Restore normal volume
+volumeEffect.volume = 1f
+```
+
+## AmplitudeEffect
+
+`AmplitudeEffect` calculates the amplitude (loudness level) of each PCM buffer and reports it via a listener. It does not modify the audio data — the original buffer is passed through unchanged. Use it to drive a volume meter UI.
+
+```kotlin
+class AmplitudeEffect(private val listener: Listener) : CustomAudioEffect() {
+
+    interface Listener {
+        fun onAmplitude(value: Float)
+    }
+
+    fun start()
+    fun stop()
+    fun isRunning(): Boolean
+
+    override fun process(pcmBuffer: ByteArray): ByteArray
+}
+```
+
+### Usage
+
+```kotlin
+import com.pedro.encoder.input.audio.AmplitudeEffect
+
+val amplitudeEffect = AmplitudeEffect(object : AmplitudeEffect.Listener {
+    override fun onAmplitude(value: Float) {
+        // Update your VU meter on the main thread
+        runOnUiThread { vuMeter.setLevel(value) }
+    }
+})
+
+// Start processing (spawns a single background thread)
+amplitudeEffect.start()
+audioSource.setAudioEffect(amplitudeEffect)
+
+// Stop when no longer needed
+amplitudeEffect.stop()
+```
+
+<Note>
+`AmplitudeEffect` uses an internal queue of up to 200 buffers to avoid blocking the audio capture thread. The `onAmplitude` callback fires on the amplitude processing thread — marshal back to the main thread before touching UI.
+</Note>
+
+## Implementing a custom effect
+
+Extend `CustomAudioEffect` to implement any PCM-level DSP you need. The buffer contains interleaved 16-bit signed little-endian PCM samples (matching whatever format you configured in `prepareAudio`).
+
+```kotlin
+import com.pedro.encoder.input.audio.CustomAudioEffect
+
+/**
+ * Simple hard-clip distortion effect.
+ */
+class DistortionEffect(private val threshold: Float = 0.5f) : CustomAudioEffect() {
+
+    override fun process(pcmBuffer: ByteArray): ByteArray {
+        // Interpret bytes as 16-bit signed samples
+        var i = 0
+        while (i < pcmBuffer.size - 1) {
+            val sample = (pcmBuffer[i].toInt() and 0xFF) or (pcmBuffer[i + 1].toInt() shl 8)
+            val normalized = sample / 32768f
+            val clipped = normalized.coerceIn(-threshold, threshold) / threshold
+            val output = (clipped * 32767).toInt().toShort()
+            pcmBuffer[i] = (output.toInt() and 0xFF).toByte()
+            pcmBuffer[i + 1] = (output.toInt() shr 8).toByte()
+            i += 2
+        }
+        return pcmBuffer
+    }
+}
+```
+
+Apply it the same way as the built-in effects:
+
+```kotlin
+audioSource.setAudioEffect(DistortionEffect(threshold = 0.3f))
+```
+
+## Hardware post-process effects
+
+`AudioPostProcessEffect` wraps Android's built-in hardware audio processors. These are configured on the `AudioRecord` session and operate at the driver level — they require the microphone session ID to attach.
+
+```kotlin
+class AudioPostProcessEffect(private val microphoneId: Int) {
+    fun enableEchoCanceler()
+    fun enableNoiseSuppressor()
+    fun enableAutoGainControl()
+    fun release()
+}
+```
+
+<Note>
+Hardware effects depend on device support. Each `enable*` method checks `isAvailable()` before attaching, and logs an error if the device does not implement the requested processor. Not all Android devices support all three effects.
+</Note>
+
+These are typically activated by passing flags into your stream's `prepareAudio` call rather than constructing `AudioPostProcessEffect` directly. Check your specific stream class API for `echoCanceler` and `noiseSuppressor` parameters.
+
+```kotlin
+// Enable echo cancellation and noise suppression at the AudioRecord level
+stream.prepareAudio(
+    sampleRate = 44100,
+    isStereo = false,
+    bitrate = 128 * 1024,
+    echoCanceler = true,
+    noiseSuppressor = true
+)
+```
+
+### Capabilities
+
+| Effect | Class | Purpose |
+|---|---|---|
+| Acoustic Echo Canceler | `AcousticEchoCanceler` | Removes the speaker output from the microphone signal (for calls/communication) |
+| Noise Suppressor | `NoiseSuppressor` | Attenuates background ambient noise |
+| Automatic Gain Control | `AutomaticGainControl` | Normalises the input level to a consistent loudness |
+
+## Combining effects
+
+Only one `CustomAudioEffect` can be active at a time on an audio source. If you need to chain multiple processing steps, compose them inside a single custom effect class.
+
+```kotlin
+class CombinedEffect(
+    private val volume: VolumeEffect,
+    private val amplitude: AmplitudeEffect,
+) : CustomAudioEffect() {
+
+    override fun process(pcmBuffer: ByteArray): ByteArray {
+        val afterVolume = volume.process(pcmBuffer)
+        return amplitude.process(afterVolume)
+    }
+}
+
+// Wire it up
+val volumeEffect = VolumeEffect().apply { volume = 1.2f }
+val amplitudeEffect = AmplitudeEffect(myListener).also { it.start() }
+
+audioSource.setAudioEffect(CombinedEffect(volumeEffect, amplitudeEffect))
+```

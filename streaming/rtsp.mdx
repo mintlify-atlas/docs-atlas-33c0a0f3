@@ -1,0 +1,175 @@
+---
+title: 'RTSP Streaming'
+description: 'Stream over RTSP and RTSPS using the RtspStream class, with TCP or UDP transport and basic/digest authentication.'
+keywords: ['rtsp', 'rtsps', 'streaming', 'android', 'rootencoder']
+---
+
+`RtspStream` connects to RTSP endpoints for live streaming. It supports both plain and TLS-secured connections:
+
+| Scheme | Description |
+|--------|-------------|
+| `rtsp://` | Standard RTSP |
+| `rtsps://` | RTSP over TLS |
+
+## Supported codecs
+
+<CardGroup cols={2}>
+  <Card title="Video" icon="video">
+    H264, H265, AV1
+  </Card>
+  <Card title="Audio" icon="microphone">
+    AAC, G711, OPUS
+  </Card>
+</CardGroup>
+
+## Basic usage
+
+<Steps>
+  <Step title="Implement ConnectChecker">
+    Your Activity or Fragment must implement `ConnectChecker` to receive connection lifecycle callbacks.
+
+    ```kotlin
+    class MainActivity : AppCompatActivity(), ConnectChecker {
+
+      override fun onConnectionStarted(url: String) {}
+      override fun onConnectionSuccess() { /* stream is live */ }
+      override fun onConnectionFailed(reason: String) { /* handle failure */ }
+      override fun onDisconnect() {}
+      override fun onAuthError() {}
+      override fun onAuthSuccess() {}
+    }
+    ```
+  </Step>
+
+  <Step title="Create RtspStream">
+    The default constructor uses `Camera2Source` and `MicrophoneSource`.
+
+    ```kotlin
+    val rtspStream = RtspStream(context, connectChecker)
+    ```
+
+    Supply custom sources via the full constructor:
+
+    ```kotlin
+    val rtspStream = RtspStream(
+      context = this,
+      connectChecker = this,
+      videoSource = Camera2Source(context),
+      audioSource = MicrophoneSource()
+    )
+    ```
+  </Step>
+
+  <Step title="Prepare video and audio">
+    ```kotlin
+    val prepared = rtspStream.prepareVideo(
+      width = 1280,
+      height = 720,
+      bitrate = 1_200_000
+    ) && rtspStream.prepareAudio(
+      sampleRate = 44100,
+      isStereo = true,
+      bitrate = 128_000
+    )
+    ```
+  </Step>
+
+  <Step title="Start and stop the stream">
+    ```kotlin
+    // RTSP
+    rtspStream.startStream("rtsp://your-server:1935/live/stream-key")
+
+    // RTSPS (TLS)
+    rtspStream.startStream("rtsps://your-server:443/live/stream-key")
+
+    // Stop
+    rtspStream.stopStream()
+    ```
+  </Step>
+</Steps>
+
+## Transport protocol
+
+RTSP can carry media over TCP or UDP. TCP is the default and works in most network environments, including those with strict firewalls. Switch to UDP when you need lower latency on a trusted network.
+
+```kotlin
+import com.pedro.rtsp.rtsp.Protocol
+
+// Use TCP transport (default)
+rtspStream.getStreamClient().setProtocol(Protocol.TCP)
+
+// Use UDP transport
+rtspStream.getStreamClient().setProtocol(Protocol.UDP)
+```
+
+Call `setProtocol` before `startStream`.
+
+## Authentication
+
+RTSP supports both basic and digest authentication. Set credentials on the stream client before calling `startStream`:
+
+```kotlin
+rtspStream.getStreamClient().setAuthorization("username", "password")
+```
+
+The library automatically negotiates the authentication scheme (basic or digest) with the server during the initial handshake.
+
+## TLS certificates
+
+For `rtsps://` connections you can supply a custom `TrustManager` to accept self-signed or private CA certificates:
+
+```kotlin
+rtspStream.getStreamClient().addCertificates(myTrustManager)
+```
+
+## Retry on failure
+
+```kotlin
+override fun onConnectionFailed(reason: String) {
+  val retrying = rtspStream.getStreamClient().reTry(5000L, reason)
+  if (!retrying) {
+    rtspStream.stopStream()
+  }
+}
+```
+
+Set the maximum number of retry attempts:
+
+```kotlin
+rtspStream.getStreamClient().setReTries(5)
+```
+
+Pass a backup URL to fail over to a secondary server:
+
+```kotlin
+rtspStream.getStreamClient().reTry(5000L, reason, "rtsp://backup-server/live/key")
+```
+
+## Cache management
+
+```kotlin
+val client = rtspStream.getStreamClient()
+
+// Check for congestion (default 20% threshold)
+val congested = client.hasCongestion()
+
+// Check with a custom threshold (0–100f)
+val congested = client.hasCongestion(50f)
+
+// Resize the packet cache in bytes
+client.resizeCache(64 * 1024 * 1024)
+
+// Discard all queued packets
+client.clearCache()
+```
+
+## Statistics
+
+```kotlin
+val client = rtspStream.getStreamClient()
+
+val sentVideo = client.getSentVideoFrames()
+val sentAudio = client.getSentAudioFrames()
+val dropped   = client.getDroppedVideoFrames()
+val bytes     = client.getBytesSend()
+```

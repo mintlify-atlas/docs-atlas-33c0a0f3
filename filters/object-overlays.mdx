@@ -1,0 +1,328 @@
+---
+title: "Object Overlays"
+description: "Composite images, animated GIFs, text watermarks, and arbitrary surfaces on top of your live stream using the object filter system."
+---
+
+Object overlays are a specialised category of OpenGL filter that composite a 2D sprite on top of the camera feed. Each overlay type extends `BaseObjectFilterRender`, which itself extends `BaseFilterRender`, so you manage overlays through the same `GlInterface` filter methods used for visual effects.
+
+All positioning and scaling values are in **percentage of the stream frame** (0–100), making overlays resolution-independent.
+
+## BaseObjectFilterRender API
+
+All overlay types share these methods, inherited from `BaseObjectFilterRender`:
+
+```java
+// Position — percentages relative to the frame (0.0–100.0)
+void setPosition(float x, float y)
+void setPosition(TranslateTo positionTo)   // convenience enum
+
+// Scale — percentage of frame width/height
+void setScale(float scaleX, float scaleY)
+
+// Rotation — degrees (integer)
+void setRotation(int angle)
+int  getRotation()
+
+// Transparency — 0.0 (transparent) to 1.0 (opaque)
+void setAlpha(float alpha)
+
+// Read back current state
+PointF getPosition()
+PointF getScale()
+PointF getOriginalScale()    // original width/height in pixels of the loaded asset
+
+// Set scale to match the asset's natural pixel size relative to stream dimensions
+void setDefaultScale(int streamWidth, int streamHeight)
+```
+
+### TranslateTo positions
+
+`TranslateTo` is an enum with named anchor positions. Use it with `setPosition(TranslateTo)` for reliable edge anchoring without calculating percentages manually.
+
+```kotlin
+import com.pedro.encoder.utils.gl.TranslateTo
+
+overlay.setPosition(TranslateTo.CENTER)
+overlay.setPosition(TranslateTo.TOP)
+overlay.setPosition(TranslateTo.BOTTOM)
+overlay.setPosition(TranslateTo.LEFT)
+overlay.setPosition(TranslateTo.RIGHT)
+overlay.setPosition(TranslateTo.TOP_LEFT)
+overlay.setPosition(TranslateTo.TOP_RIGHT)
+overlay.setPosition(TranslateTo.BOTTOM_LEFT)
+overlay.setPosition(TranslateTo.BOTTOM_RIGHT)
+```
+
+## ImageObjectFilterRender
+
+Use `ImageObjectFilterRender` to overlay a static `Bitmap` on the stream.
+
+```java
+// Load or update the bitmap at any time (thread-safe)
+void setImage(Bitmap bitmap)
+```
+
+### Example
+
+```kotlin
+import com.pedro.encoder.input.gl.render.filters.`object`.ImageObjectFilterRender
+import com.pedro.encoder.utils.gl.TranslateTo
+
+val imageOverlay = ImageObjectFilterRender()
+
+// Apply filter first so it is initialised on the GL thread
+stream.getGlInterface().setFilter(imageOverlay)
+
+// Load a bitmap (can be called before or after setFilter)
+val bitmap = BitmapFactory.decodeResource(resources, R.mipmap.watermark)
+imageOverlay.setImage(bitmap)
+
+// Scale to 25% of frame width and 15% of frame height
+imageOverlay.setScale(25f, 15f)
+
+// Anchor to the top-right corner
+imageOverlay.setPosition(TranslateTo.TOP_RIGHT)
+
+// Optional: slight transparency
+imageOverlay.setAlpha(0.85f)
+```
+
+To update the image while streaming, call `setImage()` again with a new `Bitmap`. The GL thread will load the new texture on the next frame.
+
+```kotlin
+// Swap the watermark logo at runtime
+imageOverlay.setImage(newBitmap)
+```
+
+## GifObjectFilterRender
+
+`GifObjectFilterRender` plays an animated GIF on top of the stream. The animation frames cycle automatically on the GL thread.
+
+```java
+// Load frames from any InputStream (file, assets, raw resource, network)
+void setGif(InputStream inputStream) throws IOException
+```
+
+### Example
+
+```kotlin
+import com.pedro.encoder.input.gl.render.filters.`object`.GifObjectFilterRender
+import com.pedro.encoder.utils.gl.TranslateTo
+
+val gifOverlay = GifObjectFilterRender()
+
+try {
+    // Load from a raw resource
+    gifOverlay.setGif(resources.openRawResource(R.raw.animated_badge))
+} catch (e: IOException) {
+    Log.e("Overlay", "Failed to load GIF", e)
+}
+
+stream.getGlInterface().setFilter(gifOverlay)
+
+// Position at the bottom, scaled to 50% width and 50% height
+gifOverlay.setScale(50f, 50f)
+gifOverlay.setPosition(TranslateTo.BOTTOM)
+```
+
+<Note>
+The GIF decoder loads all frames into GPU textures at once. Large or high-frame-count GIFs will consume significant GPU memory. Keep animated overlays small.
+</Note>
+
+## TextObjectFilterRender
+
+`TextObjectFilterRender` renders a text string into a bitmap and composites it as an overlay. Use it for watermarks, captions, or live counters.
+
+```java
+// Core setText variants
+void setText(String text, float textSize, int textColor)
+void setText(String text, float textSize, int textColor, int backgroundColor)
+void setText(String text, float textSize, int textColor, Typeface typeface)
+void setText(String text, float textSize, int textColor, int backgroundColor, Typeface typeface)
+
+// Incremental updates (appends to the existing text string)
+void addText(String text)
+void updateColor(int textColor)
+void updateTypeface(Typeface typeface)
+void updateTextSize(float textSize)
+```
+
+### Example
+
+```kotlin
+import android.graphics.Color
+import android.graphics.Typeface
+import com.pedro.encoder.input.gl.render.filters.`object`.TextObjectFilterRender
+import com.pedro.encoder.utils.gl.TranslateTo
+
+val textOverlay = TextObjectFilterRender()
+stream.getGlInterface().setFilter(textOverlay)
+
+// Basic watermark
+textOverlay.setText("Live", 22f, Color.WHITE)
+textOverlay.setScale(20f, 10f)
+textOverlay.setPosition(TranslateTo.TOP_LEFT)
+
+// With background and custom typeface
+val typeface = Typeface.createFromAsset(assets, "fonts/roboto_bold.ttf")
+textOverlay.setText(
+    "© MyChannel",
+    18f,
+    Color.WHITE,
+    Color.argb(120, 0, 0, 0),  // semi-transparent black background
+    typeface
+)
+textOverlay.setScale(35f, 8f)
+textOverlay.setPosition(TranslateTo.BOTTOM_RIGHT)
+```
+
+### Updating text while streaming
+
+Calling any `setText` variant regenerates the texture on the GL thread, so you can update the text live.
+
+```kotlin
+// Update a live viewer count
+var viewerCount = 0
+
+fun updateViewerCount(count: Int) {
+    viewerCount = count
+    textOverlay.setText("Viewers: $count", 20f, Color.WHITE)
+}
+```
+
+## SurfaceFilterRender
+
+`SurfaceFilterRender` exposes a `Surface` and `SurfaceTexture` that any Android API capable of rendering to a `Surface` can draw into. Use it to composite a `MediaPlayer`, `ExoPlayer`, `Camera2`, or any custom `Canvas`-based renderer as an overlay.
+
+```java
+// Callback fired on the main thread once the GL surface is ready
+interface SurfaceReadyCallback {
+    void surfaceReady(SurfaceTexture surfaceTexture);
+}
+
+// Constructor variants
+SurfaceFilterRender()
+SurfaceFilterRender(SurfaceReadyCallback surfaceReadyCallback)
+
+// Access the underlying objects after the callback fires
+SurfaceTexture getSurfaceTexture()
+Surface         getSurface()
+```
+
+<Warning>
+Both `getSurfaceTexture()` and `getSurface()` must only be rendered to from the **main thread**. The `SurfaceReadyCallback` is already posted to the main looper, so use it to start rendering immediately.
+</Warning>
+
+### Example: video-in-stream with MediaPlayer
+
+```kotlin
+import android.media.MediaPlayer
+import android.view.Surface
+import com.pedro.encoder.input.gl.render.filters.`object`.SurfaceFilterRender
+
+val surfaceOverlay = SurfaceFilterRender { surfaceTexture ->
+    // This callback fires on the main thread once the GL surface is ready
+    val player = MediaPlayer.create(this, R.raw.clip)
+    player.setSurface(Surface(surfaceTexture))
+    player.isLooping = true
+    player.start()
+}
+
+stream.getGlInterface().setFilter(surfaceOverlay)
+
+// The clip is 360×240 — scale to 50% width and 33% height to preserve aspect ratio
+surfaceOverlay.setScale(50f, 33f)
+surfaceOverlay.setPosition(TranslateTo.BOTTOM_RIGHT)
+```
+
+## Adding and removing overlays while streaming
+
+Because overlays are regular filters, you manage their lifecycle with the same `GlInterface` methods.
+
+```kotlin
+val watermark = ImageObjectFilterRender()
+watermark.setImage(logoBitmap)
+watermark.setScale(20f, 10f)
+watermark.setPosition(TranslateTo.TOP_RIGHT)
+
+// Add the overlay as the second filter (index 1), keeping an effect at index 0
+stream.getGlInterface().addFilter(1, watermark)
+
+// Replace the overlay with a different one at runtime
+stream.getGlInterface().setFilter(1, TextObjectFilterRender().apply {
+    setText("LIVE", 24f, Color.RED)
+    setScale(15f, 8f)
+    setPosition(TranslateTo.TOP_LEFT)
+})
+
+// Remove just the overlay, leaving other filters in place
+stream.getGlInterface().removeFilter(watermark)
+// or by index:
+stream.getGlInterface().removeFilter(1)
+```
+
+## Gesture control
+
+`SpriteGestureController` lets users drag and resize overlays with touch gestures. Attach it to any `BaseObjectFilterRender` instance.
+
+```kotlin
+import com.pedro.encoder.input.gl.SpriteGestureController
+
+val gestureController = SpriteGestureController()
+gestureController.setBaseObjectFilterRender(imageOverlay)
+
+// Optionally allow dragging outside frame bounds
+gestureController.setPreventMoveOutside(false)
+
+// Forward touch events from your View or SurfaceView
+override fun onTouchEvent(event: MotionEvent): Boolean {
+    gestureController.onTouchEvent(event)
+    return true
+}
+
+// Stop the gesture listener when you remove the overlay
+gestureController.stopListener()
+```
+
+## Rotation while streaming
+
+You can rotate an overlay sprite in real time. Rotation is specified in integer degrees around the sprite's centre.
+
+```kotlin
+val overlay = ImageObjectFilterRender()
+overlay.setImage(bitmap)
+overlay.setScale(30f, 30f)
+overlay.setPosition(TranslateTo.CENTER)
+overlay.setRotation(45)   // 45° clockwise
+
+stream.getGlInterface().setFilter(overlay)
+
+// Animate rotation on a timer
+var angle = 0
+val handler = Handler(Looper.getMainLooper())
+val rotator = object : Runnable {
+    override fun run() {
+        angle = (angle + 5) % 360
+        overlay.setRotation(angle)
+        handler.postDelayed(this, 50)
+    }
+}
+handler.post(rotator)
+```
+
+## Overlay types at a glance
+
+<CardGroup cols={2}>
+  <Card title="ImageObjectFilterRender" icon="image">
+    Overlay a static `Bitmap`. Replace it at any time by calling `setImage()` again.
+  </Card>
+  <Card title="GifObjectFilterRender" icon="film">
+    Overlay an animated GIF loaded from an `InputStream`. Frames animate automatically.
+  </Card>
+  <Card title="TextObjectFilterRender" icon="text">
+    Render a text string with custom size, colour, background, and typeface. Update live with `setText()`.
+  </Card>
+  <Card title="SurfaceFilterRender" icon="play">
+    Expose a `Surface` for any renderer — `MediaPlayer`, `ExoPlayer`, custom `Canvas` drawing, and more.
+  </Card>
+</CardGroup>

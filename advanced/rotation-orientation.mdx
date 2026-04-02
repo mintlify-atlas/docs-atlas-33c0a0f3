@@ -1,0 +1,281 @@
+---
+title: "Rotation & Orientation"
+description: "Control stream rotation, handle device orientation changes, and manage preview surfaces."
+---
+
+RootEncoder separates the concept of **stream resolution** from **stream orientation**. The `rotation` parameter you pass to `prepareVideo()` tells the encoder how to interpret the raw camera frames, which in turn determines the aspect ratio and dimensions of the encoded output.
+
+---
+
+## The rotation parameter
+
+`prepareVideo()` accepts a `rotation` argument (in degrees) with valid values of `0`, `90`, `180`, and `270`.
+
+| `rotation` value | Effect on encoded output |
+|---|---|
+| `0` | Width × Height (landscape). A `640×480` config produces a **640×480** stream. |
+| `90` | Dimensions are transposed. A `640×480` config produces a **480×640** stream. |
+| `180` | Width × Height, rotated 180°. Dimensions remain the same. |
+| `270` | Same transposition as 90°. A `640×480` config produces a **480×640** stream. |
+
+```kotlin
+// Landscape stream: encoded as 640×480
+genericStream.prepareVideo(width = 640, height = 480, bitrate = 1_200_000, rotation = 0)
+
+// Portrait stream: encoded as 480×640 (dimensions are transposed internally)
+genericStream.prepareVideo(width = 640, height = 480, bitrate = 1_200_000, rotation = 90)
+```
+
+<Note>
+When `rotation` is `90` or `270`, `StreamBase` automatically swaps the encoder dimensions so the output resolution matches the transposed frame. You always declare the **longer edge as width** in your `prepareVideo()` call.
+</Note>
+
+---
+
+## Automatic sensor-based rotation
+
+`GlStreamInterface.autoHandleOrientation` makes the GL renderer respond to device rotation events via `SensorRotationManager`. When enabled, the preview and stream both rotate to match the physical device orientation without any additional code.
+
+```kotlin
+val genericStream = GenericStream(context, connectChecker).apply {
+    getGlInterface().autoHandleOrientation = true
+}
+```
+
+This flag is `false` by default. Enable it for apps where the user is expected to rotate the device while streaming (for example a live sports broadcast app).
+
+---
+
+## Switching orientation programmatically
+
+When you need to toggle between landscape and portrait modes from your UI rather than relying on the sensor, release the stream, change the `rotation` value, and re-prepare:
+
+```kotlin
+// From the sample CameraFragment
+fun setOrientationMode(isVertical: Boolean) {
+    val wasOnPreview = genericStream.isOnPreview
+    genericStream.release()
+
+    rotation = if (isVertical) 90 else 0
+    val prepared = genericStream.prepareVideo(width, height, vBitrate, rotation = rotation)
+        && genericStream.prepareAudio(sampleRate, isStereo, aBitrate)
+
+    if (!prepared) return // handle error
+    if (wasOnPreview) genericStream.startPreview(surfaceView)
+}
+```
+
+---
+
+## Forcing a fixed orientation
+
+Use `GlStreamInterface.forceOrientation()` to lock the stream to a specific orientation regardless of the sensor or the `rotation` parameter. This is useful when your video source always produces frames in a known orientation (for example `CameraUvcSource` and `Media3VideoSource` both force landscape).
+
+```kotlin
+import com.pedro.encoder.input.sources.OrientationForced
+
+// Lock to portrait regardless of device rotation
+genericStream.getGlInterface().forceOrientation(OrientationForced.PORTRAIT)
+
+// Lock to landscape
+genericStream.getGlInterface().forceOrientation(OrientationForced.LANDSCAPE)
+
+// Remove forced orientation and restore sensor-driven behaviour
+genericStream.getGlInterface().forceOrientation(OrientationForced.NONE)
+```
+
+`OrientationForced` is an enum with three values: `PORTRAIT`, `LANDSCAPE`, and `NONE`.
+
+---
+
+## OrientationConfig
+
+Video sources communicate their preferred orientation to the GL layer through `OrientationConfig`. You normally do not construct this yourself, but understanding it helps when writing custom `VideoSource` implementations.
+
+```kotlin
+import com.pedro.encoder.input.sources.OrientationConfig
+import com.pedro.encoder.input.sources.OrientationForced
+
+// Force landscape regardless of anything else
+val config = OrientationConfig(forced = OrientationForced.LANDSCAPE)
+
+// Provide explicit orientation values without forcing a fixed mode
+val config2 = OrientationConfig(
+    cameraOrientation = 90,
+    isPortrait = true,
+    forced = OrientationForced.NONE
+)
+```
+
+Built-in sources (`Camera1Source`, `Camera2Source`) compute `OrientationConfig` from the camera's sensor orientation. Sources like `CameraUvcSource` and `Media3VideoSource` return `OrientationConfig(forced = OrientationForced.LANDSCAPE)`.
+
+---
+
+## Preview management
+
+### Starting preview
+
+`startPreview()` has overloads for `SurfaceView`, `TextureView`, `SurfaceTexture`, and `Surface`. Call it after `prepareVideo()`.
+
+```kotlin
+// With a SurfaceView
+genericStream.startPreview(surfaceView)
+
+// With a TextureView
+genericStream.startPreview(textureView)
+
+// Provide explicit dimensions (useful when the view size is not yet measured)
+genericStream.startPreview(surface, width = 1280, height = 720)
+```
+
+Pass `autoHandle = true` to let `StreamBase` register `SurfaceHolder` / `TextureView` callbacks and manage start/stop automatically as the surface is created and destroyed:
+
+```kotlin
+genericStream.startPreview(surfaceView, autoHandle = true)
+```
+
+### Stopping preview
+
+```kotlin
+genericStream.stopPreview()
+```
+
+If you used `autoHandle = true`, pass `removeCallbacks = true` to clean up the registered callbacks:
+
+```kotlin
+genericStream.stopPreview(removeCallbacks = true)
+```
+
+### Handling SurfaceView lifecycle manually
+
+The pattern used in the sample app gives you precise control:
+
+```kotlin
+surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        if (!genericStream.isOnPreview) genericStream.startPreview(surfaceView)
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        genericStream.getGlInterface().setPreviewResolution(width, height)
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        if (genericStream.isOnPreview) genericStream.stopPreview()
+    }
+})
+```
+
+---
+
+## Switching camera sources
+
+To switch from one camera source to another while the stream is live, call `changeVideoSource()`. The method stops the current source, re-initialises the new source with the existing encoder parameters, and starts it immediately.
+
+```kotlin
+import com.pedro.encoder.input.sources.video.Camera1Source
+import com.pedro.encoder.input.sources.video.Camera2Source
+import com.pedro.extrasources.CameraXSource
+
+// Switch to Camera1 (legacy API)
+genericStream.changeVideoSource(Camera1Source(context))
+
+// Switch to Camera2
+genericStream.changeVideoSource(Camera2Source(context))
+
+// Switch to CameraX
+genericStream.changeVideoSource(CameraXSource(context))
+```
+
+<Note>
+Switching the front/back camera is done through the **source's own API**, not through `StreamBase` directly. After a `changeVideoSource()` call, cast `genericStream.videoSource` to the concrete type and call `switchCamera()` on it.
+</Note>
+
+```kotlin
+// Switch the lens facing on whichever source is currently active
+when (val source = genericStream.videoSource) {
+    is Camera1Source -> source.switchCamera()
+    is Camera2Source -> source.switchCamera()
+    is CameraXSource -> source.switchCamera()
+}
+```
+
+---
+
+## Screen streaming
+
+Screen streaming uses `ScreenSource` rather than a camera source. Because `ScreenSource` requires a `MediaProjection` token obtained from the system, the recommended pattern is to run the stream inside a foreground `Service`.
+
+<Steps>
+  <Step title="Declare foreground service permission">
+    ```xml
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    ```
+  </Step>
+  <Step title="Create the stream with NoVideoSource">
+    Initialise `GenericStream` with `NoVideoSource()` so `prepareVideo()` succeeds before the `MediaProjection` token is available. Use `setForceRender(true)` to keep the GL thread ticking even when the screen is static.
+
+    ```kotlin
+    import com.pedro.encoder.input.sources.video.NoVideoSource
+    import com.pedro.encoder.input.sources.audio.MicrophoneSource
+
+    genericStream = GenericStream(context, connectChecker, NoVideoSource(), MicrophoneSource()).apply {
+        getGlInterface().setForceRender(true, 15)
+    }
+
+    genericStream.prepareVideo(width = 640, height = 480, bitrate = 1_200_000, rotation = 90)
+    genericStream.prepareAudio(sampleRate = 32000, isStereo = true, bitrate = 128_000)
+    ```
+  </Step>
+  <Step title="Request MediaProjection permission">
+    Launch the system screen-capture intent and handle the result:
+
+    ```kotlin
+    val activityResultLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            val mediaProjection = mediaProjectionManager
+                .getMediaProjection(result.resultCode, result.data!!)
+            val screenSource = ScreenSource(applicationContext, mediaProjection)
+            genericStream.changeVideoSource(screenSource)
+            genericStream.startStream("rtmp://your-server/live/key")
+        }
+    }
+
+    activityResultLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+Use `rotation = 90` (portrait) in `prepareVideo()` for screen captures on phones held upright. Set `rotation = 0` (landscape) for tablets or when the user holds the phone horizontally.
+</Tip>
+
+---
+
+## Orientation quick-reference
+
+<CardGroup cols={2}>
+  <Card title="Landscape stream" icon="rectangle-landscape">
+    `prepareVideo(640, 480, bitrate, rotation = 0)`
+
+    Encoded output: **640 × 480**
+  </Card>
+  <Card title="Portrait stream" icon="rectangle-portrait">
+    `prepareVideo(640, 480, bitrate, rotation = 90)`
+
+    Encoded output: **480 × 640**
+  </Card>
+  <Card title="Sensor-driven auto rotation" icon="rotate">
+    `getGlInterface().autoHandleOrientation = true`
+
+    Rotates preview and stream to match device orientation.
+  </Card>
+  <Card title="Locked orientation" icon="lock">
+    `getGlInterface().forceOrientation(OrientationForced.PORTRAIT)`
+
+    Fixed orientation regardless of sensor or rotation parameter.
+  </Card>
+</CardGroup>

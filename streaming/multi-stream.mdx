@@ -1,0 +1,187 @@
+---
+title: 'Multi-Stream'
+description: 'Simultaneously stream to multiple RTMP, RTSP, SRT, and UDP endpoints from a single encoder using MultiStream.'
+keywords: ['multi-stream', 'simultaneous streaming', 'rtmp', 'rtsp', 'srt', 'android', 'rootencoder']
+---
+
+<Warning>
+  `MultiStream` is an experimental class. Its API may change between releases.
+</Warning>
+
+`MultiStream` encodes audio and video once and fans the output to multiple simultaneous destinations. Each destination has its own `ConnectChecker` and is addressed by protocol type and a zero-based index.
+
+## How it works
+
+You supply one `ConnectChecker` array per protocol. The array length determines how many concurrent streams of that type are allowed. Pass `null` or an empty array for any protocol you do not need.
+
+```
+MultiStream(context, rtmpCheckers, rtspCheckers, srtCheckers, udpCheckers)
+```
+
+Each element in `rtmpCheckers` corresponds to one RTMP destination. Index 0 is the first RTMP stream, index 1 is the second, and so on. The same pattern applies to RTSP, SRT, and UDP.
+
+<Note>
+  Calling `startStream(endpoint)` or `stopStream()` without a `MultiType` and index does nothing. You must always specify both.
+</Note>
+
+## Basic usage
+
+<Steps>
+  <Step title="Implement ConnectChecker for each stream">
+    Create a separate `ConnectChecker` implementation for every destination. Each checker receives events only for its own stream.
+
+    ```kotlin
+    val checker1 = object : ConnectChecker {
+      override fun onConnectionStarted(url: String) {}
+      override fun onConnectionSuccess() { Log.d("Stream1", "Connected") }
+      override fun onConnectionFailed(reason: String) {
+        multiStream.getStreamClient(MultiType.RTMP, 0).reTry(5000L, reason)
+      }
+      override fun onDisconnect() {}
+      override fun onAuthError() {}
+      override fun onAuthSuccess() {}
+    }
+
+    val checker2 = object : ConnectChecker {
+      override fun onConnectionStarted(url: String) {}
+      override fun onConnectionSuccess() { Log.d("Stream2", "Connected") }
+      override fun onConnectionFailed(reason: String) {
+        multiStream.getStreamClient(MultiType.RTMP, 1).reTry(5000L, reason)
+      }
+      override fun onDisconnect() {}
+      override fun onAuthError() {}
+      override fun onAuthSuccess() {}
+    }
+
+    val rtspChecker = object : ConnectChecker {
+      override fun onConnectionStarted(url: String) {}
+      override fun onConnectionSuccess() { Log.d("RtspStream", "Connected") }
+      override fun onConnectionFailed(reason: String) {
+        multiStream.getStreamClient(MultiType.RTSP, 0).reTry(5000L, reason)
+      }
+      override fun onDisconnect() {}
+      override fun onAuthError() {}
+      override fun onAuthSuccess() {}
+    }
+    ```
+  </Step>
+
+  <Step title="Create MultiStream">
+    Pass arrays of checkers for each protocol. Pass `null` for protocols you are not using.
+
+    ```kotlin
+    // 2 RTMP streams, 1 RTSP stream, no SRT, no UDP
+    val multiStream = MultiStream(
+      context,
+      arrayOf(checker1, checker2),  // RTMP
+      arrayOf(rtspChecker),         // RTSP
+      null,                         // SRT — not used
+      null                          // UDP — not used
+    )
+    ```
+
+    You can also provide custom video and audio sources:
+
+    ```kotlin
+    val multiStream = MultiStream(
+      context,
+      arrayOf(checker1, checker2),
+      arrayOf(rtspChecker),
+      null,                          // SRT — not used
+      null,                          // UDP — not used
+      Camera2Source(context),
+      MicrophoneSource()
+    )
+    ```
+  </Step>
+
+  <Step title="Prepare video and audio">
+    Encoding is shared across all streams. Configure it once:
+
+    ```kotlin
+    val prepared = multiStream.prepareVideo(
+      width = 1280,
+      height = 720,
+      bitrate = 2_500_000
+    ) && multiStream.prepareAudio(
+      sampleRate = 44100,
+      isStereo = true,
+      bitrate = 128_000
+    )
+    ```
+  </Step>
+
+  <Step title="Start individual streams">
+    Use `startStream(type, index, endpoint)` to connect each destination independently:
+
+    ```kotlin
+    // Start first RTMP stream (checker1)
+    multiStream.startStream(MultiType.RTMP, 0, "rtmp://primary-server/live/key")
+
+    // Start second RTMP stream (checker2)
+    multiStream.startStream(MultiType.RTMP, 1, "rtmp://secondary-server/live/key")
+
+    // Start the RTSP stream (rtspChecker)
+    multiStream.startStream(MultiType.RTSP, 0, "rtsp://record-server:1935/live/key")
+    ```
+  </Step>
+
+  <Step title="Stop individual streams">
+    Stop each destination independently without affecting the others:
+
+    ```kotlin
+    // Stop second RTMP stream only
+    multiStream.stopStream(MultiType.RTMP, 1)
+
+    // Stop the RTSP stream
+    multiStream.stopStream(MultiType.RTSP, 0)
+    ```
+
+    The encoder stops automatically once all active streams have been stopped.
+  </Step>
+</Steps>
+
+## Retry per stream
+
+Each stream client manages its own retry state. Call `reTry` on the specific client from within its `ConnectChecker.onConnectionFailed` callback:
+
+```kotlin
+// Retry the first RTMP stream after 5 seconds
+multiStream.getStreamClient(MultiType.RTMP, 0).reTry(5000L, reason)
+
+// Retry the RTSP stream with a backup URL
+multiStream.getStreamClient(MultiType.RTSP, 0).reTry(5000L, reason, "rtsp://backup/live/key")
+```
+
+Set per-stream retry limits:
+
+```kotlin
+multiStream.getStreamClient(MultiType.RTMP, 0).setReTries(5)
+multiStream.getStreamClient(MultiType.RTMP, 1).setReTries(3)
+```
+
+## getStreamClient
+
+`getStreamClient(type, index)` returns a `StreamBaseClient` typed to the requested protocol. Casting it gives access to protocol-specific methods:
+
+```kotlin
+// Cast to RtmpStreamClient for RTMP-specific methods
+val rtmpClient = multiStream.getStreamClient(MultiType.RTMP, 0) as RtmpStreamClient
+rtmpClient.setWriteChunkSize(4096)
+rtmpClient.shouldSendPings(true)
+```
+
+<Note>
+  Calling `getStreamClient()` without arguments on a `MultiStream` throws `IllegalStateException`. Always use `getStreamClient(type, index)`.
+</Note>
+
+## Supported MultiType values
+
+```kotlin
+import com.pedro.library.multiple.MultiType
+
+MultiType.RTMP
+MultiType.RTSP
+MultiType.SRT
+MultiType.UDP
+```

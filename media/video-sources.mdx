@@ -1,0 +1,316 @@
+---
+title: 'Video Sources'
+description: 'Swap camera, screen, file, bitmap, or raw buffer video sources at runtime using the VideoSource abstraction.'
+keywords: ['video source', 'camera', 'screen capture', 'video file', 'bitmap', 'buffer', 'camera2', 'camera1']
+---
+
+RootEncoder routes all video through a `VideoSource` abstraction. Every stream or recording reads from exactly one active source at a time, but you can replace that source at any point — even while the stream is live — by calling `changeVideoSource()`.
+
+## How VideoSource works
+
+Every concrete source extends the abstract `VideoSource` class, which defines the lifecycle that the library manages internally:
+
+```kotlin
+abstract class VideoSource {
+  var width: Int
+  var height: Int
+  var fps: Int
+  var rotation: Int
+
+  fun init(width: Int, height: Int, fps: Int, rotation: Int): Boolean
+  abstract fun start(surfaceTexture: SurfaceTexture)
+  abstract fun stop()
+  abstract fun release()
+  abstract fun isRunning(): Boolean
+}
+```
+
+You never call `init`, `start`, `stop`, or `release` directly. The library calls them for you when you invoke `prepareVideo()`, `startStream()`, `stopStream()`, and `changeVideoSource()`.
+
+## Changing the video source at runtime
+
+Call `changeVideoSource()` on your stream instance after `prepareVideo()` has been called. The library stops the current source, initializes the new one with the same resolution and frame-rate parameters, and resumes capture — all without dropping the stream.
+
+```kotlin
+// Switch from the default Camera2 to a video file mid-stream
+val fileSource = VideoFileSource(context, Uri.fromFile(File(path)))
+rtmpStream.changeVideoSource(fileSource)
+
+// Switch back to camera later
+rtmpStream.changeVideoSource(Camera2Source(context))
+```
+
+<Note>
+`changeVideoSource()` throws `IllegalArgumentException` if the new source does not support the resolution that was passed to `prepareVideo()`.
+</Note>
+
+---
+
+## Available video sources
+
+<Tabs>
+  <Tab title="Camera2Source">
+
+**Camera2Source** is the default and recommended video source. It uses the Android Camera2 API (API 21+) and supports advanced features like optical stabilization, auto-exposure control, and physical cameras.
+
+```kotlin
+val camera2Source = Camera2Source(context)
+
+// Optionally pin a required resolution before prepareVideo
+camera2Source.setRequiredResolution(Size(1920, 1080))
+
+val rtmpStream = RtmpStream(context, camera2Source, MicrophoneSource())
+rtmpStream.prepareVideo(1280, 720, 2_000_000)
+rtmpStream.prepareAudio(44100, true, 128_000)
+```
+
+### Camera controls
+
+```kotlin
+// Switch between front and back cameras
+camera2Source.switchCamera()
+
+// Query available cameras
+val ids: Array<String> = camera2Source.camerasAvailable()
+camera2Source.openCameraId("1")
+
+// Zoom (Camera2 uses Float)
+camera2Source.setZoom(2.0f)
+val range: Range<Float> = camera2Source.getZoomRange()
+
+// Torch / lantern
+camera2Source.enableLantern()
+camera2Source.disableLantern()
+
+// Auto focus
+camera2Source.enableAutoFocus()
+camera2Source.tapToFocus(view, motionEvent)
+
+// Exposure
+camera2Source.setExposure(0)
+
+// Stabilization
+camera2Source.enableVideoStabilization()
+camera2Source.enableOpticalVideoStabilization()
+
+// Auto white balance (uses CameraCharacteristics.AWB_MODE_* constants)
+camera2Source.enableAutoWhiteBalance(CameraCharacteristics.CONTROL_AWB_MODE_AUTO)
+
+// Face detection
+camera2Source.enableFaceDetection(faceDetectorCallback)
+
+// Physical cameras (API 28+)
+camera2Source.physicalCamerasAvailable()
+camera2Source.openPhysicalCamera("0")
+
+// Apply a fully custom CaptureRequest
+camera2Source.setCustomRequest { builder ->
+  builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+}
+```
+
+  </Tab>
+  <Tab title="Camera1Source">
+
+**Camera1Source** uses the legacy Camera API and works on devices running API 16 and above. Use it only when targeting older devices, since Camera2 is strongly preferred.
+
+<Warning>
+`Camera1Source` requires API 21+ despite wrapping the legacy Camera API, because of OpenGL dependencies introduced in that release.
+</Warning>
+
+```kotlin
+val camera1Source = Camera1Source(context)
+
+val rtmpStream = RtmpStream(context, camera1Source, MicrophoneSource())
+rtmpStream.prepareVideo(1280, 720, 2_000_000)
+```
+
+### Camera controls
+
+```kotlin
+// Switch cameras
+camera1Source.switchCamera()
+
+// Open a specific camera by integer ID
+camera1Source.openCameraId(0)
+
+// Zoom (Camera1 uses Int)
+camera1Source.setZoom(5)
+val range: Range<Int> = camera1Source.getZoomRange()
+
+// Torch
+camera1Source.enableLantern()
+
+// Auto focus
+camera1Source.enableAutoFocus()
+camera1Source.tapToFocus(view, motionEvent)
+
+// Exposure
+camera1Source.setExposure(0)
+
+// Video stabilization
+camera1Source.enableVideoStabilization()
+
+// White balance (uses Camera.Parameters.WHITE_BALANCE_* string constants)
+camera1Source.enableAutoWhiteBalance("auto")
+
+// Face detection
+camera1Source.enableFaceDetection(faceDetectorCallback)
+```
+
+  </Tab>
+  <Tab title="ScreenSource">
+
+**ScreenSource** captures the device screen using the MediaProjection API. Requires API 21+ and a `MediaProjection` instance obtained from `MediaProjectionManager`.
+
+```kotlin
+// Obtain MediaProjection via the standard permission flow
+val mediaProjection: MediaProjection = mediaProjectionManager
+  .getMediaProjection(resultCode, data)
+
+val screenSource = ScreenSource(context, mediaProjection)
+
+val rtmpStream = RtmpStream(context, screenSource, MicrophoneSource())
+rtmpStream.prepareVideo(1280, 720, 4_000_000)
+```
+
+You can optionally supply callbacks for `MediaProjection` and `VirtualDisplay` lifecycle events:
+
+```kotlin
+val screenSource = ScreenSource(
+  context = context,
+  mediaProjection = mediaProjection,
+  mediaProjectionCallback = object : MediaProjection.Callback() {
+    override fun onStop() { /* projection was revoked */ }
+  },
+  virtualDisplayCallback = object : VirtualDisplay.Callback() {
+    override fun onPaused() { /* display paused */ }
+    override fun onResumed() { /* display resumed */ }
+  }
+)
+```
+
+To resize the virtual display at runtime:
+
+```kotlin
+screenSource.resize(1920, 1080)
+```
+
+  </Tab>
+  <Tab title="VideoFileSource">
+
+**VideoFileSource** decodes a video file and feeds its frames into the stream. Requires API 21+.
+
+```kotlin
+val uri = Uri.fromFile(File("/sdcard/clip.mp4"))
+
+val fileSource = VideoFileSource(
+  context = context,
+  path = uri,
+  loopMode = true,                 // loop indefinitely (default)
+  onFinish = { isLoop ->
+    if (!isLoop) Log.d("TAG", "playback finished")
+  }
+)
+
+val rtmpStream = RtmpStream(context, fileSource, MicrophoneSource())
+rtmpStream.prepareVideo(1280, 720, 2_000_000)
+```
+
+### Playback control
+
+```kotlin
+// Seek to a position in seconds
+fileSource.moveTo(30.0)
+
+// Query duration and current position
+val duration: Long = fileSource.getDuration()
+val time: Long = fileSource.getTime()
+
+// Toggle looping
+fileSource.setLoopMode(false)
+
+// Swap the file without recreating the source
+fileSource.replaceFile(context, Uri.fromFile(File("/sdcard/clip2.mp4")))
+```
+
+<Note>
+The video file's resolution does not need to match `prepareVideo()` — the OpenGL layer scales the frames to the configured stream resolution automatically.
+</Note>
+
+  </Tab>
+  <Tab title="BitmapSource">
+
+**BitmapSource** renders a `Bitmap` at the configured frame rate. Use it to stream a static image or to display a placeholder before real camera access is granted. Requires API 21+.
+
+```kotlin
+val bitmap = BitmapFactory.decodeResource(resources, R.drawable.placeholder)
+val bitmapSource = BitmapSource(bitmap)
+
+val rtmpStream = RtmpStream(context, bitmapSource, MicrophoneSource())
+rtmpStream.prepareVideo(1280, 720, 500_000)
+```
+
+The bitmap is scaled to the stream dimensions at startup. The source internally drives its own rendering loop at the fps set in `prepareVideo()`.
+
+<Tip>
+Combine `BitmapSource` with `changeVideoSource()` to display a "Be Right Back" screen during a stream pause, then swap back to `Camera2Source` when ready.
+</Tip>
+
+  </Tab>
+  <Tab title="BufferVideoSource">
+
+**BufferVideoSource** lets you push raw or compressed video frames directly into the encoder pipeline. Requires API 21+.
+
+Supported input formats:
+
+| Format | Description |
+|--------|-------------|
+| `H264` | Compressed H.264 NAL units |
+| `H265` | Compressed H.265 NAL units |
+| `AV1` | Compressed AV1 bitstream |
+| `NV21` | YUV 4:2:0 semi-planar (NV21 byte layout) |
+| `NV12` | YUV 4:2:0 semi-planar (NV12 byte layout) |
+| `RGB` | 32-bit ARGB int array |
+| `ARGB` | 32-bit ARGB int array |
+
+```kotlin
+val bufferSource = BufferVideoSource(
+  format = BufferVideoSource.Format.NV21,
+  bitrate = 2_000_000
+)
+
+val rtmpStream = RtmpStream(context, bufferSource, MicrophoneSource())
+rtmpStream.prepareVideo(1280, 720, 2_000_000)
+```
+
+### Pushing frames
+
+```kotlin
+// For H264 / H265 / AV1 / NV21 / NV12
+bufferSource.setBuffer(byteArray)
+bufferSource.setBuffer(byteBuffer)
+
+// For RGB / ARGB only
+bufferSource.setBuffer(intArray)
+```
+
+<Warning>
+Compressed formats (H264, H265, AV1) are re-decoded and then re-encoded by the library, which adds latency and CPU overhead. Prefer uncompressed YUV formats when integrating with a custom capture pipeline.
+</Warning>
+
+  </Tab>
+  <Tab title="NoVideoSource">
+
+**NoVideoSource** disables video entirely, allowing you to stream audio only. It is automatically selected by `startRecord()` when you request audio-only tracks, but you can also use it explicitly.
+
+```kotlin
+import com.pedro.encoder.input.sources.video.NoVideoSource
+
+val rtmpStream = RtmpStream(context, NoVideoSource(), MicrophoneSource())
+rtmpStream.prepareAudio(44100, true, 128_000)
+rtmpStream.startStream("rtmp://...")
+```
+
+  </Tab>
+</Tabs>

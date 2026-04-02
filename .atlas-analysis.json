@@ -1,0 +1,97 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "RootEncoder",
+  "projectDescription": "An Android SDK for encoding and streaming live video/audio to media servers using RTMP, RTSP, SRT, and UDP protocols.",
+  "theme": "palm",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Streaming",
+            "pages": [
+              "streaming/rtmp",
+              "streaming/rtsp",
+              "streaming/srt",
+              "streaming/udp",
+              "streaming/generic",
+              "streaming/multi-stream"
+            ]
+          },
+          {
+            "group": "Video & Audio",
+            "pages": [
+              "media/video-sources",
+              "media/audio-sources",
+              "media/codecs",
+              "media/recording"
+            ]
+          },
+          {
+            "group": "Filters & Effects",
+            "pages": [
+              "filters/opengl-filters",
+              "filters/audio-effects",
+              "filters/object-overlays"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/extra-sources",
+              "advanced/bitrate-adaptation",
+              "advanced/rotation-orientation",
+              "advanced/troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "RTMP, RTSP, SRT, and UDP streaming protocols",
+    "H264, H265, AV1, AAC, G711, and OPUS codec support",
+    "OpenGL real-time video filters (40+ built-in filters)",
+    "Multiple video sources: Camera1, Camera2, CameraX, Screen, File, Buffer",
+    "Multiple audio sources: Microphone, Internal audio, File, Mix",
+    "Simultaneous multi-stream support to multiple endpoints",
+    "MP4 recording while streaming",
+    "RTMPS/RTSPS TLS encryption and SRT AES encryption",
+    "Dynamic bitrate adaptation and congestion control",
+    "Android API 16+ support (API 21+ for modern features)"
+  ],
+  "publicApiSurface": [
+    "GenericStream — stream over RTMP/RTSP/SRT/UDP with automatic protocol detection",
+    "RtmpStream — RTMP/RTMPS/RTMPT streaming",
+    "RtspStream — RTSP/RTSPS streaming",
+    "SrtStream — SRT streaming with encryption",
+    "UdpStream — UDP/MPEG-TS unicast, multicast, and broadcast",
+    "MultiStream — simultaneous multiple endpoint streaming",
+    "StreamBase.prepareVideo() — configure video encoder",
+    "StreamBase.prepareAudio() — configure audio encoder",
+    "StreamBase.startStream(url) — begin streaming",
+    "StreamBase.stopStream() — end streaming",
+    "StreamBase.startRecord(path) — record to file",
+    "StreamBase.getGlInterface() — access OpenGL filter interface",
+    "StreamBase.changeVideoSource(source) — swap video source on the fly",
+    "StreamBase.changeAudioSource(source) — swap audio source on the fly",
+    "ConnectChecker — callback interface for connection events",
+    "StreamBaseClient — protocol-specific configuration (auth, retry, cache)",
+    "BaseFilterRender — base class for custom OpenGL filters",
+    "VideoSource / AudioSource — base classes for custom sources",
+    "CameraXSource — CameraX-based video source (extra-sources module)",
+    "CameraUvcSource — USB camera source (extra-sources module)"
+  ]
+}

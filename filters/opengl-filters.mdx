@@ -1,0 +1,327 @@
+---
+title: "OpenGL Filters"
+description: "Apply real-time GPU-accelerated visual effects to your stream using the built-in filter system."
+---
+
+RootEncoder's filter system runs entirely on the GPU via OpenGL ES 2.0. Filters execute during the render pipeline, before frames are handed to the encoder, so they do not meaningfully increase CPU load during streaming or recording.
+
+Every filter extends `BaseFilterRender`. You apply filters through the `GlInterface` exposed by your stream instance.
+
+## Applying filters
+
+Use `getGlInterface()` on your stream class to access filter management methods.
+
+```kotlin
+// Replace the current filter with a new one (single-filter mode)
+stream.getGlInterface().setFilter(BrightnessFilterRender())
+
+// Add a filter to the chain without removing existing ones
+stream.getGlInterface().addFilter(BlurFilterRender())
+
+// Add a filter at a specific position in the chain
+stream.getGlInterface().addFilter(1, SepiaFilterRender())
+
+// Replace the filter at a specific position
+stream.getGlInterface().setFilter(0, ContrastFilterRender())
+
+// Remove the filter at a specific position
+stream.getGlInterface().removeFilter(0)
+
+// Remove a specific filter instance
+val blur = BlurFilterRender()
+stream.getGlInterface().addFilter(blur)
+stream.getGlInterface().removeFilter(blur)
+
+// Remove all active filters
+stream.getGlInterface().clearFilters()
+
+// Query how many filters are currently active
+val count = stream.getGlInterface().filtersCount()
+```
+
+<Note>
+Filters run on the GL thread. You can call filter management methods from any thread — they are queued safely.
+</Note>
+
+## Stacking multiple filters
+
+You can chain multiple filters together. Each filter in the chain receives the output texture of the previous one.
+
+```kotlin
+// Apply brightness boost then a blur on top
+val brightness = BrightnessFilterRender().apply {
+    setBrightness(1.4f)
+}
+val blur = BlurFilterRender().apply {
+    setBlur(6)
+}
+
+stream.getGlInterface().addFilter(brightness)
+stream.getGlInterface().addFilter(blur)
+```
+
+<Tip>
+Keep the chain short. Every filter adds one full-resolution off-screen render pass. Two or three filters is a practical limit on most mobile hardware.
+</Tip>
+
+## Built-in filters
+
+<AccordionGroup>
+  <Accordion title="Visual effects">
+    | Class | Description |
+    |---|---|
+    | `AnalogTVFilterRender` | Simulates old analog television noise and scan lines |
+    | `BasicDeformationFilterRender` | Applies wave-based geometric deformation |
+    | `CartoonFilterRender` | Quantises colours to produce a cartoon/cel-shaded look |
+    | `ChromaticAberrationFilterRender` | Splits RGB channels to mimic lens chromatic aberration |
+    | `DistortedTvFilterRender` | Combines RGB shift and scan-line noise for a distorted CRT effect |
+    | `EdgeDetectionFilterRender` | Highlights edges using a Sobel or fast convolution shader; accepts a `performanceMode` boolean in the constructor |
+    | `FireFilterRender` | Procedural animated fire overlay |
+    | `GlitchFilterRender` | Random horizontal slice displacement glitch effect |
+    | `HalftoneLinesFilterRender` | Renders the image as halftone dots/lines |
+    | `RippleFilterRender` | Animated water-ripple distortion |
+    | `SnowFilterRender` | Animated falling snow particle effect |
+    | `SwirlFilterRender` | Swirls the image around the centre |
+    | `ZebraFilterRender` | Alternating zebra-stripe exposure overlay |
+    | `CircleFilterRender` | Masks output to a circular viewport |
+    | `BlackFilterRender` | Blacks out the video (useful for muting video temporarily) |
+  </Accordion>
+
+  <Accordion title="Colour and tone">
+    | Class | Description |
+    |---|---|
+    | `BrightnessFilterRender` | Adjusts luminance; `setBrightness(float)` — range `0.1–2.0`, default `0.5` |
+    | `ContrastFilterRender` | Adjusts contrast between darks and lights |
+    | `SaturationFilterRender` | Adjusts overall colour saturation |
+    | `RGBSaturationFilterRender` | Per-channel saturation; `setRGBSaturation(r, g, b)` — each `0.0–1.0` |
+    | `GammaFilterRender` | Applies gamma correction to the image |
+    | `ExposureFilterRender` | Simulates camera exposure adjustment |
+    | `TemperatureFilterRender` | Shifts colour temperature warm or cool |
+    | `DuotoneFilterRender` | Maps the image to two colours |
+    | `SepiaFilterRender` | Applies a warm sepia tone |
+    | `GreyScaleFilterRender` | Converts the image to greyscale |
+    | `NegativeFilterRender` | Inverts all colours |
+    | `ColorFilterRender` | Applies a flat colour tint |
+  </Accordion>
+
+  <Accordion title="Style and artistic">
+    | Class | Description |
+    |---|---|
+    | `BlurFilterRender` | Gaussian blur; `setBlur(int)` — recommended range `0–20`; `setRadius(float)` — default `0.03` |
+    | `SharpnessFilterRender` | Increases edge sharpness |
+    | `BeautyFilterRender` | Smoothing/beautification pass |
+    | `NoiseFilterRender` | Adds random film grain noise |
+    | `PixelatedFilterRender` | Pixelates the image |
+    | `PolygonizationFilterRender` | Tessellates the image into low-poly triangles |
+    | `RainbowFilterRender` | Overlays a rainbow colour sweep |
+    | `EarlyBirdFilterRender` | Vintage warm vignette preset |
+    | `Image70sFilterRender` | Faded 1970s film look preset |
+    | `LamoishFilterRender` | Desaturated, faded style preset |
+    | `MoneyFilterRender` | High-contrast monochrome engraving style |
+  </Accordion>
+
+  <Accordion title="Transform and compositing">
+    | Class | Description |
+    |---|---|
+    | `RotationFilterRender` | Rotates the video; `setRotation(int)` in degrees; `flip(horizontalFlip, verticalFlip)` |
+    | `CropFilterRender` | Crops and zooms into a region; `setCropArea(offsetX, offsetY, width, height)` — values in percent |
+    | `ChromaFilterRender` | Green/blue-screen chroma key; `setImage(Bitmap)` sets the background; `setSensitive(float)` tunes key sensitivity |
+    | `AndroidViewFilterRender` | Renders any Android `View` as a full-frame overlay; set the view with the `view` property |
+  </Accordion>
+</AccordionGroup>
+
+## Example: brightness and blur
+
+```kotlin
+import com.pedro.encoder.input.gl.render.filters.BrightnessFilterRender
+import com.pedro.encoder.input.gl.render.filters.BlurFilterRender
+
+// Boost brightness to 1.4 (normal is 1.0, range 0.1–2.0)
+val brightnessFilter = BrightnessFilterRender()
+brightnessFilter.setBrightness(1.4f)
+
+// Light blur (default blur is 10, recommended max 20)
+val blurFilter = BlurFilterRender()
+blurFilter.setBlur(6)
+blurFilter.setRadius(0.03f)
+
+val gl = stream.getGlInterface()
+gl.addFilter(brightnessFilter) // index 0
+gl.addFilter(blurFilter)       // index 1
+
+// Later, swap the blur for sepia without touching brightness
+gl.setFilter(1, SepiaFilterRender())
+
+// Or remove all filters at once
+gl.clearFilters()
+```
+
+## EdgeDetectionFilterRender
+
+`EdgeDetectionFilterRender` accepts a `performanceMode` boolean constructor parameter.
+
+- `true` (default) — fast convolution shader, no configurable colours.
+- `false` — Sobel-based shader with configurable edge colour, background colour, and edge size.
+
+```kotlin
+// Fast mode (default)
+stream.getGlInterface().setFilter(EdgeDetectionFilterRender())
+
+// Quality mode with custom colours
+val edge = EdgeDetectionFilterRender(performanceMode = false)
+edge.setEdgeRGBColor(255, 255, 0)       // yellow edges
+edge.setBackgroundRGBColor(0, 0, 0)    // black background
+edge.setEdgeSize(0.002f)
+stream.getGlInterface().setFilter(edge)
+```
+
+## ChromaFilterRender
+
+Use `ChromaFilterRender` to replace a green or blue screen with a background image.
+
+```kotlin
+val chroma = ChromaFilterRender()
+chroma.setImage(BitmapFactory.decodeResource(resources, R.drawable.bg_chroma))
+chroma.setSensitive(0.8f) // 0.0–1.0; higher = less sensitive
+stream.getGlInterface().setFilter(chroma)
+```
+
+## RotationFilterRender
+
+```kotlin
+val rotation = RotationFilterRender()
+rotation.setRotation(90)                    // rotate 90°
+rotation.flip(horizontalFlip = true, verticalFlip = false)
+
+// Keep correct aspect ratio when rotating 90° or 270°
+rotation.setRotationFixed(90, streamWidth, streamHeight, isPortrait = false)
+
+stream.getGlInterface().setFilter(rotation)
+```
+
+## CropFilterRender
+
+`setCropArea` takes percentages measured from the top-left corner.
+
+```kotlin
+val crop = CropFilterRender()
+// Show a 40×40% window starting at 30% from the left and 30% from the top
+crop.setCropArea(30f, 30f, 40f, 40f)
+stream.getGlInterface().setFilter(crop)
+```
+
+## Creating a custom filter
+
+Extend `BaseFilterRender` and implement three abstract methods.
+
+```kotlin
+import android.content.Context
+import android.opengl.GLES20
+import android.opengl.Matrix
+import com.pedro.encoder.R
+import com.pedro.encoder.input.gl.render.filters.BaseFilterRender
+import com.pedro.encoder.utils.gl.GlUtil
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+class MyCustomFilter : BaseFilterRender() {
+
+    private val squareVertexData = floatArrayOf(
+        -1f, -1f, 0f, 0f, 0f,
+         1f, -1f, 0f, 1f, 0f,
+        -1f,  1f, 0f, 0f, 1f,
+         1f,  1f, 0f, 1f, 1f,
+    )
+
+    private var program = -1
+    private var aPositionHandle = -1
+    private var aTextureHandle = -1
+    private var uMVPMatrixHandle = -1
+    private var uSTMatrixHandle = -1
+    private var uSamplerHandle = -1
+
+    // Add any custom uniform handles here
+    private var uMyParamHandle = -1
+    var myParam = 1.0f
+
+    init {
+        squareVertex = ByteBuffer
+            .allocateDirect(squareVertexData.size * FLOAT_SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        squareVertex.put(squareVertexData).position(0)
+        Matrix.setIdentityM(MVPMatrix, 0)
+        Matrix.setIdentityM(STMatrix, 0)
+    }
+
+    override fun initGlFilter(context: Context) {
+        // Load your vertex and fragment shaders from raw resources
+        val vertexShader = GlUtil.getStringFromRaw(context, R.raw.simple_vertex)
+        val fragmentShader = GlUtil.getStringFromRaw(context, R.raw.my_custom_fragment)
+        program = GlUtil.createProgram(vertexShader, fragmentShader)
+
+        aPositionHandle = GLES20.glGetAttribLocation(program, "aPosition")
+        aTextureHandle = GLES20.glGetAttribLocation(program, "aTextureCoord")
+        uMVPMatrixHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
+        uSTMatrixHandle = GLES20.glGetUniformLocation(program, "uSTMatrix")
+        uSamplerHandle = GLES20.glGetUniformLocation(program, "uSampler")
+        uMyParamHandle = GLES20.glGetUniformLocation(program, "uMyParam")
+    }
+
+    override fun drawFilter() {
+        GLES20.glUseProgram(program)
+
+        squareVertex.position(SQUARE_VERTEX_DATA_POS_OFFSET)
+        GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false,
+            SQUARE_VERTEX_DATA_STRIDE_BYTES, squareVertex)
+        GLES20.glEnableVertexAttribArray(aPositionHandle)
+
+        squareVertex.position(SQUARE_VERTEX_DATA_UV_OFFSET)
+        GLES20.glVertexAttribPointer(aTextureHandle, 2, GLES20.GL_FLOAT, false,
+            SQUARE_VERTEX_DATA_STRIDE_BYTES, squareVertex)
+        GLES20.glEnableVertexAttribArray(aTextureHandle)
+
+        GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, MVPMatrix, 0)
+        GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, STMatrix, 0)
+        GLES20.glUniform1f(uMyParamHandle, myParam)
+
+        GLES20.glUniform1i(uSamplerHandle, 0)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, previousTexId)
+    }
+
+    override fun disableResources() {
+        GlUtil.disableResources(aTextureHandle, aPositionHandle)
+    }
+
+    override fun release() {
+        GLES20.glDeleteProgram(program)
+    }
+}
+```
+
+Then apply it the same way as any built-in filter:
+
+```kotlin
+val myFilter = MyCustomFilter()
+myFilter.myParam = 0.75f
+stream.getGlInterface().setFilter(myFilter)
+```
+
+<Warning>
+All OpenGL calls inside `initGlFilter`, `drawFilter`, and `disableResources` execute on the GL thread. Never access UI objects directly from these methods.
+</Warning>
+
+## RenderMode
+
+`BaseFilterRender` exposes a `setRenderMode(RenderMode)` method that controls whether the filter runs for the stream, the preview, or both.
+
+```kotlin
+import com.pedro.encoder.input.gl.render.RenderMode
+
+val filter = SepiaFilterRender()
+filter.setRenderMode(RenderMode.STREAM) // only affects the outgoing stream
+filter.setRenderMode(RenderMode.PREVIEW) // only affects the local preview
+filter.setRenderMode(RenderMode.ALL)    // default — affects both
+stream.getGlInterface().setFilter(filter)
+```

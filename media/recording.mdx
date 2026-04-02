@@ -1,0 +1,221 @@
+---
+title: 'Recording'
+description: 'Record video and audio to a local file simultaneously with streaming, or independently without a stream.'
+keywords: ['recording', 'MP4', 'record', 'startRecord', 'stopRecord', 'RecordController', 'muxer']
+---
+
+RootEncoder can record to a local file independently of streaming. You can record while streaming, record without streaming, and start or stop each independently at any time. Recording is managed through `startRecord()` and `stopRecord()` on your stream instance.
+
+## Starting and stopping a recording
+
+```kotlin
+// Start recording to a file path
+rtmpStream.startRecord(
+  path = "/sdcard/output.mp4",
+  listener = { status ->
+    Log.d("TAG", "Record status: $status")
+  }
+)
+
+// Stop recording
+rtmpStream.stopRecord()
+
+// Check if currently recording
+val recording: Boolean = rtmpStream.isRecording
+```
+
+`startRecord()` requires `prepareVideo()` and `prepareAudio()` to have been called first, just like streaming.
+
+---
+
+## RecordController.Listener
+
+The listener you pass to `startRecord()` is a single-method interface that reports status changes:
+
+```kotlin
+val listener = RecordController.Listener { status ->
+  when (status) {
+    RecordController.Status.STARTED    -> { /* muxer initialized, waiting for first keyframe */ }
+    RecordController.Status.RECORDING  -> { /* first keyframe received, data is being written */ }
+    RecordController.Status.PAUSED     -> { /* recording paused via pauseRecord() */ }
+    RecordController.Status.RESUMED    -> { /* recording resumed via resumeRecord() */ }
+    RecordController.Status.STOPPED    -> { /* recording stopped, file is finalized */ }
+  }
+}
+
+rtmpStream.startRecord("/sdcard/output.mp4", listener)
+```
+
+<Note>
+The listener transitions from `STARTED` to `RECORDING` only after the first video keyframe is written. There may be a brief delay between calling `startRecord()` and the status reaching `RECORDING`.
+</Note>
+
+---
+
+## Status enum
+
+| Status | Description |
+|--------|-------------|
+| `STARTED` | `startRecord()` called; muxer initialized but awaiting first keyframe. |
+| `RECORDING` | First keyframe received; encoded frames are actively written to disk. |
+| `PAUSED` | Recording paused with `pauseRecord()`. |
+| `RESUMED` | Recording resumed with `resumeRecord()`. Waits for next keyframe before writing resumes. |
+| `STOPPED` | `stopRecord()` called; file is closed and finalized. |
+
+---
+
+## Pausing and resuming
+
+You can pause and resume a recording without stopping it:
+
+```kotlin
+rtmpStream.pauseRecord()
+rtmpStream.resumeRecord()
+```
+
+Pausing suspends writes to disk. The output file remains open. When you resume, the library waits for the next keyframe before it continues writing, which avoids decoder artifacts at the resume point.
+
+---
+
+## Recording specific tracks
+
+By default, `startRecord()` records both audio and video. Use `RecordController.RecordTracks` to record only one track:
+
+```kotlin
+// Record audio only
+rtmpStream.startRecord(
+  path = "/sdcard/audio.aac",
+  tracks = RecordController.RecordTracks.AUDIO,
+  listener = myListener
+)
+
+// Record video only
+rtmpStream.startRecord(
+  path = "/sdcard/video.mp4",
+  tracks = RecordController.RecordTracks.VIDEO,
+  listener = myListener
+)
+
+// Record both (default)
+rtmpStream.startRecord(
+  path = "/sdcard/output.mp4",
+  tracks = RecordController.RecordTracks.ALL,
+  listener = myListener
+)
+```
+
+`RecordTracks` is also used automatically: when the active video source is `NoVideoSource`, `startRecord()` defaults to `AUDIO`. When the active audio source is `NoAudioSource`, it defaults to `VIDEO`.
+
+---
+
+## Recording independently of streaming
+
+Recording and streaming are independent operations. You can record without ever starting a stream:
+
+```kotlin
+rtmpStream.prepareVideo(1280, 720, 2_000_000)
+rtmpStream.prepareAudio(44100, true, 128_000)
+
+// Record to disk only — no stream started
+rtmpStream.startRecord("/sdcard/output.mp4", listener)
+
+// Later, start streaming while still recording
+rtmpStream.startStream("rtmp://...")
+
+// Stop streaming without stopping the recording
+rtmpStream.stopStream()
+
+// Stop recording separately
+rtmpStream.stopRecord()
+```
+
+---
+
+## Record controllers
+
+The record controller determines the output container format. Swap it using `setRecordController()` before starting a recording:
+
+<Tabs>
+  <Tab title="AndroidMuxerRecordController">
+
+The default record controller. Writes an **MP4** file using Android's `MediaMuxer`. Supports H.264, H.265, and AV1 video codecs. Requires AAC audio.
+
+```kotlin
+import com.pedro.library.util.AndroidMuxerRecordController
+
+// This is the default; you only need to set it explicitly if you
+// previously changed the controller to something else.
+rtmpStream.setRecordController(AndroidMuxerRecordController())
+
+rtmpStream.startRecord("/sdcard/output.mp4", listener)
+```
+
+  </Tab>
+  <Tab title="AacMuxerRecordController">
+
+Writes a raw **AAC** file with ADTS headers. Only supports `RecordTracks.AUDIO` and requires the `AAC` audio codec.
+
+```kotlin
+import com.pedro.library.util.AacMuxerRecordController
+
+rtmpStream.setRecordController(AacMuxerRecordController())
+
+rtmpStream.startRecord(
+  path = "/sdcard/output.aac",
+  tracks = RecordController.RecordTracks.AUDIO,
+  listener = myListener
+)
+```
+
+  </Tab>
+  <Tab title="FlvMuxerRecordController">
+
+Writes an **FLV** file. Supports all video codecs (H.264, H.265, AV1) and all audio codecs (AAC, G.711, OPUS). Useful when your media server or player expects FLV input.
+
+```kotlin
+import com.pedro.library.util.FlvMuxerRecordController
+
+rtmpStream.setRecordController(FlvMuxerRecordController())
+
+rtmpStream.startRecord("/sdcard/output.flv", listener)
+```
+
+  </Tab>
+</Tabs>
+
+<Warning>
+Call `setRecordController()` before `startRecord()`. Changing the controller while a recording is in progress is not allowed and will be silently ignored.
+</Warning>
+
+---
+
+## Full example
+
+<Steps>
+  <Step title="Prepare encoders">
+    ```kotlin
+    rtmpStream.setVideoCodec(VideoCodec.H264)
+    rtmpStream.setAudioCodec(AudioCodec.AAC)
+    rtmpStream.prepareVideo(1280, 720, 2_000_000)
+    rtmpStream.prepareAudio(44100, true, 128_000)
+    ```
+  </Step>
+  <Step title="Start recording">
+    ```kotlin
+    rtmpStream.startRecord("/sdcard/output.mp4") { status ->
+      Log.d("TAG", "Record status changed: $status")
+    }
+    ```
+  </Step>
+  <Step title="Optionally start streaming simultaneously">
+    ```kotlin
+    rtmpStream.startStream("rtmp://live.example.com/app/stream-key")
+    ```
+  </Step>
+  <Step title="Stop recording and streaming">
+    ```kotlin
+    rtmpStream.stopRecord()
+    rtmpStream.stopStream()
+    ```
+  </Step>
+</Steps>

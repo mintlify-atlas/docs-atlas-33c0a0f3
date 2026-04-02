@@ -1,0 +1,75 @@
+---
+title: "Introduction"
+description: "RootEncoder is an Android SDK for encoding and streaming live video and audio to media servers using RTMP, RTSP, SRT, and UDP."
+---
+
+RootEncoder is an open-source Android library written in Kotlin/Java that handles the full streaming pipeline: capturing video and audio, encoding with hardware-accelerated codecs, applying real-time OpenGL filters, and delivering the stream over your chosen protocol. A single dependency covers everything from camera input to RTMP/RTSP/SRT/UDP output.
+
+<Note>
+  RootEncoder requires Android API 16 as a minimum. Most modern features — including `GenericStream`, CameraX support, screen capture, and advanced codecs — require API 21+.
+</Note>
+
+## Supported protocols
+
+<CardGroup cols={2}>
+  <Card title="RTMP" icon="tower-broadcast">
+    Stream to YouTube, Twitch, Facebook Live, and any RTMP/RTMPS/RTMPT server. Supports H264, H265 (enhanced RTMP), AV1 (enhanced RTMP), AAC, G711, and OPUS (enhanced RTMP).
+  </Card>
+  <Card title="RTSP" icon="satellite-dish">
+    Stream to surveillance systems, VLC, and RTSP media servers over TCP or UDP. Supports H264, H265, AV1, AAC, G711, and OPUS. RTSPS (TLS) included.
+  </Card>
+  <Card title="SRT" icon="bolt">
+    Reliable, low-latency contribution links with packet retransmission and AES encryption (128/192/256-bit). Supports H264, H265, AAC, and OPUS.
+  </Card>
+  <Card title="UDP" icon="network-wired">
+    MPEG2-TS over UDP with unicast, multicast, and broadcast support. Supports H264, H265, AAC, and OPUS.
+  </Card>
+</CardGroup>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Video codecs" icon="film">
+    H264, H265, and AV1 with hardware or software encoding. Switch codecs at configuration time without changing your streaming code.
+  </Card>
+  <Card title="Audio codecs" icon="microphone">
+    AAC, G711, and OPUS encoding with optional noise suppressor and echo cancellation built in.
+  </Card>
+  <Card title="Multiple video sources" icon="camera">
+    Camera1 API, Camera2 API, CameraX, screen capture (API 21+), file playback, and custom buffer sources. Switch sources while streaming.
+  </Card>
+  <Card title="Real-time OpenGL filters" icon="wand-magic-sparkles">
+    Apply and stack video filters on the GPU without stopping the stream. Add image, GIF, or text overlays in real time.
+  </Card>
+  <Card title="Record while streaming" icon="circle-dot">
+    Write a local MP4 file simultaneously with live streaming (API 18+). Supports a different resolution for the recording than the stream.
+  </Card>
+  <Card title="Adaptive bitrate" icon="chart-line">
+    Adjust video bitrate on the fly (API 19+) in response to network conditions using the built-in `BitrateAdapter`.
+  </Card>
+  <Card title="Authentication" icon="lock">
+    RTMP Adobe and LLNW auth, RTSP basic and digest auth, and RTMPS/RTSPS over TLS.
+  </Card>
+  <Card title="Rotation support" icon="rotate">
+    Handle device orientation changes and stream in portrait or landscape without restarting the stream.
+  </Card>
+</CardGroup>
+
+## Module structure
+
+RootEncoder is organized into independent Gradle modules. The `library` module is the only one you typically need to add as a dependency — it includes and re-exports all protocol and encoder modules.
+
+| Module | Purpose |
+|---|---|
+| `library` | Main entry point. Contains `GenericStream`, `RtmpStream`, `RtspStream`, `SrtStream`, and their base classes. |
+| `encoder` | Video and audio encoder wrappers, camera/microphone source abstractions, and OpenGL rendering. |
+| `rtmp` | RTMP/RTMPS/RTMPT client implementation including enhanced RTMP for H265 and AV1. |
+| `rtsp` | RTSP/RTSPS client with TCP and UDP transport, basic and digest auth. |
+| `srt` | SRT client with retransmission and AES encryption. |
+| `udp` | UDP client with MPEG2-TS packetization and multicast support. |
+| `common` | Shared interfaces and utilities used across all modules, including `ConnectChecker`. |
+| `extra-sources` | Optional module adding `CameraXSource` and `CameraUvcSource` (API 21+, separate dependency). |
+
+## Version
+
+The current stable version is **2.7.2**, distributed via JitPack. See [Installation](/installation) for setup instructions.

@@ -1,0 +1,223 @@
+---
+title: "Bitrate Adaptation"
+description: "Respond to changing network conditions by adjusting video bitrate on the fly."
+---
+
+A fixed video bitrate works well on a stable network, but real-world connections fluctuate. When available bandwidth drops below your configured bitrate the encoder queue fills up, frames are dropped, and the viewer sees buffering or a frozen picture. Bitrate adaptation monitors the connection and adjusts the encoder target dynamically so the stream stays smooth.
+
+---
+
+## Setting bitrate on the fly
+
+`StreamBase.setVideoBitrateOnFly()` instructs the video encoder to change its target bitrate without interrupting the stream. You can call it at any point while streaming.
+
+```kotlin
+// Reduce to 800 kbps when the network degrades
+genericStream.setVideoBitrateOnFly(800_000)
+
+// Restore to full quality when bandwidth recovers
+genericStream.setVideoBitrateOnFly(2_000_000)
+```
+
+<Note>
+Hardware encoders honour this request on a best-effort basis. The actual output bitrate may not change instantaneously and can temporarily exceed or fall below the requested value.
+</Note>
+
+---
+
+## Detecting congestion
+
+The stream client exposes two overloads of `hasCongestion()` that let you check whether the send buffer is under pressure.
+
+```kotlin
+val client = genericStream.getStreamClient()
+
+// Default: returns true when the buffer is more than 20 % full
+val isCongested: Boolean = client.hasCongestion()
+
+// Custom threshold: true when more than 40 % of the cache is occupied
+val isCongested40: Boolean = client.hasCongestion(40f)
+```
+
+`hasCongestion(percentUsed: Float)` accepts a value from `0f` to `100f` representing the percentage of the send cache that must be occupied before the method returns `true`.
+
+---
+
+## Smoothing bitrate spikes with the exponential factor
+
+Rapid bitrate swings can confuse encoders and produce quality artefacts. The exponential factor dampens the calculated bitrate to give a smoother adaptation curve.
+
+```kotlin
+val client = genericStream.getStreamClient()
+
+// Read the current factor (default is 1.0 — no smoothing)
+val currentFactor: Float = client.getBitrateExponentialFactor()
+
+// Set a factor between 0.1 and 1.0
+// Lower values produce a more gradual response to bandwidth changes
+client.setBitrateExponentialFactor(0.5f)
+```
+
+<Tip>
+Start with a factor around `0.5f` and tune from there. A factor of `1.0f` (the default) means no exponential smoothing is applied.
+</Tip>
+
+---
+
+## Using BitrateAdapter
+
+RootEncoder ships a `BitrateAdapter` helper class that smooths out short-lived bandwidth spikes by averaging several `onNewBitrate` callbacks before acting. It fires `onBitrateAdapted()` every five samples.
+
+### Basic setup
+
+```kotlin
+import com.pedro.library.util.BitrateAdapter
+
+val maxBitrate = 2_000_000 + 128_000 // video + audio bitrate ceiling
+
+val bitrateAdapter = BitrateAdapter { adaptedBitrate ->
+    genericStream.setVideoBitrateOnFly(adaptedBitrate)
+}.apply {
+    setMaxBitrate(maxBitrate)
+}
+```
+
+### Wiring it to ConnectChecker
+
+`ConnectChecker.onNewBitrate()` delivers the current measured throughput in bits per second. Pass this value to `adaptBitrate()` along with the congestion flag:
+
+```kotlin
+override fun onNewBitrate(bitrate: Long) {
+    val hasCongestion = genericStream.getStreamClient().hasCongestion()
+    bitrateAdapter.adaptBitrate(bitrate, hasCongestion)
+}
+```
+
+### Tuning the adaptation ranges
+
+By default `BitrateAdapter` decreases the bitrate by 20 % when congestion is detected and increases it by 20 % when bandwidth is available. You can adjust both thresholds:
+
+```kotlin
+// Decrease by 30 % on congestion
+bitrateAdapter.setDecreaseRange(30f)
+
+// Increase by 10 % when recovering (conservative ramp-up)
+bitrateAdapter.setIncreaseRange(10f)
+```
+
+`setDecreaseRange` and `setIncreaseRange` accept values from `0` to `100` (exclusive), representing percentages.
+
+---
+
+## Monitoring stream statistics
+
+Use the stream client to read live statistics for more advanced adaptive logic.
+
+```kotlin
+val client = genericStream.getStreamClient()
+
+// Bytes sent since the stream started (or since the last reset)
+val bytesSent: Long = client.getBytesSend()
+
+// Frame counters
+val sentVideo: Long   = client.getSentVideoFrames()
+val sentAudio: Long   = client.getSentAudioFrames()
+val droppedVideo: Long = client.getDroppedVideoFrames()
+val droppedAudio: Long = client.getDroppedAudioFrames()
+
+// Reset individual counters
+client.resetBytesSend()
+client.resetDroppedVideoFrames()
+client.resetDroppedAudioFrames()
+```
+
+---
+
+## Managing the send cache
+
+The send cache holds encoded packets waiting to be transmitted. A larger cache absorbs short bandwidth drops; a smaller cache reduces latency.
+
+```kotlin
+val client = genericStream.getStreamClient()
+
+// Resize the cache (in bytes). Throws RuntimeException if the operation fails.
+client.resizeCache(4 * 1024 * 1024) // 4 MB
+
+// Inspect the current state
+val cacheSize: Int     = client.getCacheSize()
+val itemsInCache: Int  = client.getItemsInCache()
+
+// Clear all queued packets immediately
+client.clearCache()
+```
+
+<Warning>
+Calling `clearCache()` discards all buffered packets. Use it only in recovery scenarios (for example, after a reconnect) to avoid a corrupt stream.
+</Warning>
+
+---
+
+## Practical adaptive bitrate pattern
+
+Below is a complete example combining `BitrateAdapter`, congestion detection, and reconnection into a single `ConnectChecker` implementation.
+
+```kotlin
+import com.pedro.common.ConnectChecker
+import com.pedro.library.generic.GenericStream
+import com.pedro.library.util.BitrateAdapter
+
+class StreamManager(private val context: android.content.Context) : ConnectChecker {
+
+    private val maxBitrate = 2_000_000
+    private val audioBitrate = 128_000
+
+    val stream = GenericStream(context, this).also { s ->
+        s.prepareVideo(1280, 720, maxBitrate)
+        s.prepareAudio(44100, isStereo = true, audioBitrate)
+        s.getStreamClient().setReTries(5)
+    }
+
+    private val bitrateAdapter = BitrateAdapter { adapted ->
+        stream.setVideoBitrateOnFly(adapted)
+    }.apply {
+        setMaxBitrate(maxBitrate + audioBitrate)
+        setDecreaseRange(25f) // cut 25 % on congestion
+        setIncreaseRange(15f) // recover 15 % at a time
+    }
+
+    override fun onNewBitrate(bitrate: Long) {
+        val hasCongestion = stream.getStreamClient().hasCongestion()
+        bitrateAdapter.adaptBitrate(bitrate, hasCongestion)
+    }
+
+    override fun onConnectionFailed(reason: String) {
+        // Retry up to 5 times with a 3-second delay
+        if (!stream.getStreamClient().reTry(3000L, reason)) {
+            stream.stopStream()
+        }
+    }
+
+    override fun onConnectionStarted(url: String) {}
+    override fun onConnectionSuccess() { bitrateAdapter.reset() }
+    override fun onDisconnect() {}
+    override fun onAuthError() { stream.stopStream() }
+    override fun onAuthSuccess() {}
+}
+```
+
+<Tip>
+Call `bitrateAdapter.reset()` in `onConnectionSuccess()` so the adapter starts fresh after a reconnect rather than acting on stale averaged samples.
+</Tip>
+
+---
+
+## Setting a stream delay
+
+If your use case tolerates higher latency in exchange for a larger network jitter buffer, you can introduce a send delay. This creates an internal cache that holds packets for the given number of milliseconds before transmitting them.
+
+```kotlin
+// Buffer 2 seconds of data before sending
+genericStream.getStreamClient().setDelay(2000L)
+```
+
+Use this alongside `resizeCache()` to ensure the cache is large enough to hold the delay's worth of data.

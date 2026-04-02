@@ -1,0 +1,202 @@
+---
+title: 'RTMP Streaming'
+description: 'Stream over RTMP, RTMPS, RTMPT, and RTMPTS using the RtmpStream class.'
+keywords: ['rtmp', 'rtmps', 'rtmpt', 'streaming', 'android', 'rootencoder']
+---
+
+`RtmpStream` connects to RTMP-based endpoints and handles the full streaming lifecycle. It supports four URL schemes:
+
+| Scheme | Description |
+|--------|-------------|
+| `rtmp://` | Standard RTMP |
+| `rtmps://` | RTMP over TLS |
+| `rtmpt://` | RTMP tunneled over HTTP |
+| `rtmpts://` | RTMP tunneled over HTTPS |
+
+<Note>
+  H265 and AV1 video codecs use the enhanced RTMP specification. Not all ingest servers support enhanced RTMP — verify your server's compatibility before using these codecs.
+</Note>
+
+## Supported codecs
+
+<CardGroup cols={2}>
+  <Card title="Video" icon="video">
+    H264, H265 (enhanced RTMP), AV1 (enhanced RTMP)
+  </Card>
+  <Card title="Audio" icon="microphone">
+    AAC, G711, OPUS (enhanced RTMP)
+  </Card>
+</CardGroup>
+
+## Basic usage
+
+<Steps>
+  <Step title="Implement ConnectChecker">
+    Your Activity or Fragment must implement `ConnectChecker` to receive connection lifecycle callbacks.
+
+    ```kotlin
+    class MainActivity : AppCompatActivity(), ConnectChecker {
+
+      override fun onConnectionStarted(url: String) {}
+      override fun onConnectionSuccess() { /* stream is live */ }
+      override fun onConnectionFailed(reason: String) { /* handle failure */ }
+      override fun onDisconnect() {}
+      override fun onAuthError() {}
+      override fun onAuthSuccess() {}
+    }
+    ```
+  </Step>
+
+  <Step title="Create RtmpStream">
+    Instantiate `RtmpStream` with a `Context` and your `ConnectChecker`. The default constructor uses `Camera2Source` and `MicrophoneSource`.
+
+    ```kotlin
+    val rtmpStream = RtmpStream(context, connectChecker)
+    ```
+
+    To supply custom video or audio sources, use the full constructor:
+
+    ```kotlin
+    val rtmpStream = RtmpStream(
+      context = this,
+      connectChecker = this,
+      videoSource = Camera2Source(context),
+      audioSource = MicrophoneSource()
+    )
+    ```
+  </Step>
+
+  <Step title="Prepare video and audio">
+    Call `prepareVideo` and `prepareAudio` before starting the stream.
+
+    ```kotlin
+    val prepared = rtmpStream.prepareVideo(
+      width = 1280,
+      height = 720,
+      bitrate = 1_200_000
+    ) && rtmpStream.prepareAudio(
+      sampleRate = 44100,
+      isStereo = true,
+      bitrate = 128_000
+    )
+    ```
+  </Step>
+
+  <Step title="Start and stop the stream">
+    ```kotlin
+    // Start streaming
+    rtmpStream.startStream("rtmp://your-server/live/stream-key")
+
+    // Stop streaming
+    rtmpStream.stopStream()
+    ```
+
+    For RTMPS (TLS), change the scheme:
+
+    ```kotlin
+    rtmpStream.startStream("rtmps://your-server/live/stream-key")
+    ```
+  </Step>
+</Steps>
+
+## Authentication
+
+RTMP supports Adobe-style and LLNW-style authentication. Set credentials on the stream client before calling `startStream`.
+
+```kotlin
+rtmpStream.getStreamClient().setAuthorization("username", "password")
+```
+
+Call `setAuthorization` before `startStream` — credentials set after the connection begins are ignored.
+
+## RtmpStreamClient methods
+
+Access the RTMP-specific client with `getStreamClient()`. In addition to the methods shared by all stream clients, `RtmpStreamClient` exposes:
+
+```kotlin
+val client = rtmpStream.getStreamClient()
+
+// Set chunk size sent to the server (default 128, range 1–16777215)
+// Must be called before startStream
+client.setWriteChunkSize(4096)
+
+// Set the flash version reported in the connect command
+// Default: "FMLE/3.0 (compatible; Lavf57.56.101)"
+// Must be called before startStream
+client.setFlashVersion("FMLE/3.0 (compatible; Lavf57.56.101)")
+
+// Force incremental timestamps across all packet types (required by some CDNs such as Dacast/Akamai)
+client.forceIncrementalTs(true)
+
+// Send ping commands each second to keep the read channel alive and measure RTT
+client.shouldSendPings(true)
+
+// Read the round-trip time in microseconds (requires shouldSendPings to be enabled)
+val rttMicros = client.getRtt()
+
+// Notify the server of a failed read — useful with shouldSendPings to detect silent disconnects
+client.shouldFailOnRead(true)
+
+// Pass custom AMF objects in the connect command
+client.setCustomAmfObject(mapOf("platform" to "android"))
+
+// Add TLS certificates for RTMPS connections
+client.addCertificates(trustManager)
+```
+
+## Retry on failure
+
+Use `reTry` inside `onConnectionFailed` to attempt automatic reconnection:
+
+```kotlin
+override fun onConnectionFailed(reason: String) {
+  // Retry after 5 seconds, up to the number of retries set with setReTries
+  val retrying = rtmpStream.getStreamClient().reTry(5000L, reason)
+  if (!retrying) {
+    rtmpStream.stopStream()
+  }
+}
+```
+
+Set the maximum number of retry attempts before `reTry` returns `false`:
+
+```kotlin
+rtmpStream.getStreamClient().setReTries(5)
+```
+
+You can also provide a backup URL to fail over to a secondary ingest server:
+
+```kotlin
+rtmpStream.getStreamClient().reTry(5000L, reason, "rtmp://backup-server/live/key")
+```
+
+## Cache management
+
+The stream client buffers packets in memory to absorb momentary network fluctuations. Use these methods to monitor and control the cache:
+
+```kotlin
+val client = rtmpStream.getStreamClient()
+
+// Check if the cache is more than 20% full (default threshold)
+val congested = client.hasCongestion()
+
+// Check against a custom threshold (0–100f)
+val congested = client.hasCongestion(50f)
+
+// Change the cache size in bytes
+client.resizeCache(64 * 1024 * 1024)
+
+// Discard all queued packets immediately
+client.clearCache()
+```
+
+## Statistics
+
+```kotlin
+val client = rtmpStream.getStreamClient()
+
+val sentVideo = client.getSentVideoFrames()
+val sentAudio = client.getSentAudioFrames()
+val dropped   = client.getDroppedVideoFrames()
+val bytes     = client.getBytesSend()
+```

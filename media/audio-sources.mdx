@@ -1,0 +1,274 @@
+---
+title: 'Audio Sources'
+description: 'Choose and swap microphone, internal audio, file, mix, or silence audio sources using the AudioSource abstraction.'
+keywords: ['audio source', 'microphone', 'internal audio', 'audio file', 'mix audio', 'silence', 'echo cancellation', 'noise suppressor']
+---
+
+All audio in RootEncoder flows through an `AudioSource` abstraction. One source is active at a time, but you can swap it at runtime — including during an active stream — by calling `changeAudioSource()`.
+
+## How AudioSource works
+
+Every concrete source extends the abstract `AudioSource` class:
+
+```kotlin
+abstract class AudioSource {
+  var sampleRate: Int
+  var isStereo: Boolean
+  var echoCanceler: Boolean
+  var noiseSuppressor: Boolean
+
+  fun init(sampleRate: Int, isStereo: Boolean, echoCanceler: Boolean, noiseSuppressor: Boolean): Boolean
+  abstract fun start(getMicrophoneData: GetMicrophoneData)
+  abstract fun stop()
+  abstract fun isRunning(): Boolean
+  abstract fun release()
+}
+```
+
+The library calls these methods for you. You configure the audio parameters through `prepareAudio()` on your stream instance:
+
+```kotlin
+rtmpStream.prepareAudio(
+  sampleRate = 44100,
+  isStereo = true,
+  bitrate = 128_000,
+  echoCanceler = true,
+  noiseSuppressor = true
+)
+```
+
+## Changing the audio source at runtime
+
+Call `changeAudioSource()` after `prepareAudio()` has been called. The new source is initialized with the same sample rate, channel, and DSP settings as the original:
+
+```kotlin
+// Switch from microphone to an audio file mid-stream
+val fileSource = AudioFileSource(context, Uri.fromFile(File(path)))
+rtmpStream.changeAudioSource(fileSource)
+
+// Switch back to microphone
+rtmpStream.changeAudioSource(MicrophoneSource())
+```
+
+---
+
+## Available audio sources
+
+<Tabs>
+  <Tab title="MicrophoneSource">
+
+**MicrophoneSource** is the default audio source. It records from the device microphone using Android's `AudioRecord` API.
+
+```kotlin
+val micSource = MicrophoneSource()
+
+// Or specify a different AudioSource type from MediaRecorder.AudioSource
+val micSource = MicrophoneSource(
+  audioSource = MediaRecorder.AudioSource.CAMCORDER
+)
+
+val rtmpStream = RtmpStream(context, Camera2Source(context), micSource)
+rtmpStream.prepareAudio(
+  sampleRate = 44100,
+  isStereo = true,
+  bitrate = 128_000,
+  echoCanceler = true,
+  noiseSuppressor = true
+)
+```
+
+### Microphone controls
+
+```kotlin
+// Mute / unmute without stopping capture
+micSource.mute()
+micSource.unMute()
+micSource.isMuted() // Boolean
+
+// Adjust volume (1.0 = original, 2.0 = double)
+micSource.microphoneVolume = 2.0f
+
+// Apply a custom DSP effect
+micSource.setAudioEffect(myCustomAudioEffect)
+
+// Route to a specific audio device (API 23+)
+micSource.setPreferredDevice(audioDeviceInfo)
+```
+
+  </Tab>
+  <Tab title="InternalAudioSource">
+
+**InternalAudioSource** captures audio playing inside the device using `AudioPlaybackCapture`. Requires API 29+ (Android 10) and a valid `MediaProjection`.
+
+It captures audio from usages: `USAGE_MEDIA`, `USAGE_GAME`, and `USAGE_UNKNOWN`.
+
+```kotlin
+val mediaProjection: MediaProjection = mediaProjectionManager
+  .getMediaProjection(resultCode, data)
+
+val internalSource = InternalAudioSource(mediaProjection)
+
+val rtmpStream = RtmpStream(context, screenSource, internalSource)
+rtmpStream.prepareAudio(44100, true, 128_000)
+```
+
+You can supply an optional `MediaProjection.Callback` to handle projection lifecycle events:
+
+```kotlin
+val internalSource = InternalAudioSource(
+  mediaProjection = mediaProjection,
+  mediaProjectionCallback = object : MediaProjection.Callback() {
+    override fun onStop() { /* projection revoked */ }
+  }
+)
+```
+
+### Controls
+
+```kotlin
+internalSource.mute()
+internalSource.unMute()
+internalSource.isMuted()
+
+// Adjust capture volume
+internalSource.internalVolume = 1.5f
+
+internalSource.setAudioEffect(myEffect)
+```
+
+<Warning>
+`InternalAudioSource` throws `IllegalStateException` if instantiated on a device running Android 9 or lower.
+</Warning>
+
+  </Tab>
+  <Tab title="AudioFileSource">
+
+**AudioFileSource** decodes an audio file and feeds its PCM frames into the encoder. The file's sample rate and channel configuration must match the values passed to `prepareAudio()`.
+
+```kotlin
+val uri = Uri.fromFile(File("/sdcard/music.aac"))
+
+val fileSource = AudioFileSource(
+  context = context,
+  path = uri,
+  loopMode = true,
+  onFinish = { isLoop ->
+    if (!isLoop) Log.d("TAG", "Playback ended")
+  }
+)
+
+val rtmpStream = RtmpStream(context, Camera2Source(context), fileSource)
+// sampleRate and isStereo must match the audio file's actual format
+rtmpStream.prepareAudio(44100, true, 128_000)
+```
+
+### Playback control
+
+```kotlin
+// Seek to a position in seconds
+fileSource.moveTo(15.0)
+
+// Query duration and position
+val duration: Long = fileSource.getDuration()
+val time: Long = fileSource.getTime()
+
+// Toggle looping
+fileSource.setLoopMode(false)
+
+// Swap the file at runtime (sample rate and channels must match)
+fileSource.replaceFile(context, Uri.fromFile(File("/sdcard/music2.aac")))
+
+// Mute / unmute
+fileSource.mute()
+fileSource.unMute()
+
+// Optionally play through the device speaker while streaming
+fileSource.playAudioDevice()
+fileSource.stopAudioDevice()
+fileSource.isAudioDeviceEnabled()
+```
+
+  </Tab>
+  <Tab title="MixAudioSource">
+
+**MixAudioSource** combines the device microphone and internal app audio into a single mixed PCM stream. Requires API 29+ and a `MediaProjection`.
+
+```kotlin
+val mediaProjection: MediaProjection = mediaProjectionManager
+  .getMediaProjection(resultCode, data)
+
+val mixSource = MixAudioSource(
+  mediaProjection = mediaProjection,
+  microphoneAudioSource = MediaRecorder.AudioSource.DEFAULT
+)
+
+val rtmpStream = RtmpStream(context, screenSource, mixSource)
+rtmpStream.prepareAudio(
+  sampleRate = 44100,
+  isStereo = true,
+  bitrate = 128_000,
+  echoCanceler = true,    // recommended to suppress echo on mic track
+  noiseSuppressor = true  // recommended
+)
+```
+
+<Tip>
+Increase `microphoneVolume` to around `2.0f` when using `MixAudioSource`. Internal audio tends to be louder and can drown out the microphone track at the default level.
+</Tip>
+
+### Volume controls
+
+```kotlin
+// Combined volume for both tracks
+mixSource.mixVolume = 1.0f
+
+// Per-track volume control
+mixSource.microphoneVolume = 2.0f
+mixSource.internalVolume = 1.0f
+
+// Mute all input
+mixSource.mute()
+mixSource.unMute()
+
+// Route microphone to a specific device (API 23+)
+mixSource.setPreferredDevice(audioDeviceInfo)
+
+// Apply a DSP effect
+mixSource.setAudioEffect(myEffect)
+```
+
+<Note>
+Using `MediaRecorder.AudioSource.CAMCORDER` for the microphone audio source blocks other apps from accessing the microphone. Use `DEFAULT` or `MIC` if you want shared access.
+</Note>
+
+  </Tab>
+  <Tab title="SilenceAudioSource">
+
+**SilenceAudioSource** continuously emits zero-valued PCM frames at the configured sample rate. Use it when you want to maintain an audio track in the stream without capturing any real audio.
+
+```kotlin
+val silenceSource = SilenceAudioSource()
+
+val rtmpStream = RtmpStream(context, Camera2Source(context), silenceSource)
+rtmpStream.prepareAudio(44100, true, 128_000)
+```
+
+This is useful for video-only content that still needs a valid audio track in the container, or as a safe default before the user grants microphone permission.
+
+  </Tab>
+  <Tab title="NoAudioSource">
+
+**NoAudioSource** disables audio entirely. Use it for true video-only streams that should carry no audio track at all.
+
+```kotlin
+import com.pedro.encoder.input.sources.audio.NoAudioSource
+
+val rtmpStream = RtmpStream(context, Camera2Source(context), NoAudioSource())
+rtmpStream.prepareVideo(1280, 720, 2_000_000)
+rtmpStream.startStream("rtmp://...")
+```
+
+`startRecord()` automatically selects video-only tracks when the active audio source is `NoAudioSource`.
+
+  </Tab>
+</Tabs>

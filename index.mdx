@@ -1,97 +1,59 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "RootEncoder"
+description: "An Android SDK for encoding and streaming live video and audio to media servers using RTMP, RTSP, SRT, and UDP."
 ---
 
-## Setting up
+RootEncoder is a powerful Android streaming library written in Java/Kotlin. It handles video and audio capture, hardware-accelerated encoding, real-time OpenGL filtering, and delivery over RTMP, RTSP, SRT, and UDP — all in a single dependency.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Stream live video from your Android camera in under 5 minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="wrench" href="/installation">
+    Add RootEncoder to your Gradle project and configure permissions.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Streaming Protocols" icon="tower-broadcast" href="/streaming/generic">
+    Choose from RTMP, RTSP, SRT, and UDP with a unified API.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Filters & Effects" icon="wand-magic-sparkles" href="/filters/opengl-filters">
+    Apply 40+ real-time OpenGL video filters while streaming.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What you can build
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Live streaming app" icon="video" href="/streaming/rtmp">
+    Push live streams to YouTube, Twitch, Facebook, or any RTMP server.
+  </Card>
+  <Card title="RTSP broadcaster" icon="satellite-dish" href="/streaming/rtsp">
+    Stream to surveillance systems, VLC, or any RTSP media server.
+  </Card>
+  <Card title="Low-latency SRT" icon="bolt" href="/streaming/srt">
+    Use SRT for reliable, encrypted, low-latency contribution links.
+  </Card>
+  <Card title="Multi-destination stream" icon="network-wired" href="/streaming/multi-stream">
+    Simultaneously push one stream to multiple endpoints or protocols.
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Key features
 
-## Need inspiration?
+<CardGroup cols={2}>
+  <Card title="Video sources" icon="camera" href="/media/video-sources">
+    Camera1, Camera2, CameraX, screen capture, file playback, and custom buffer sources.
+  </Card>
+  <Card title="Audio sources" icon="microphone" href="/media/audio-sources">
+    Microphone, internal audio capture, file, silence, and mix sources.
+  </Card>
+  <Card title="Codec support" icon="film" href="/media/codecs">
+    H264, H265, AV1 video and AAC, G711, OPUS audio with hardware/software selection.
+  </Card>
+  <Card title="Record while streaming" icon="circle-dot" href="/media/recording">
+    Record to MP4 locally at the same time as you stream to a server.
+  </Card>
+</CardGroup>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+  RootEncoder requires Android API 16 minimum. Most advanced features (CameraX, screen capture, modern codecs) require API 21+. See [Installation](/installation) for the full requirements.
+</Note>

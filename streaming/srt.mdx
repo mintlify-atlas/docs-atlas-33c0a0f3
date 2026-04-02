@@ -1,0 +1,180 @@
+---
+title: 'SRT Streaming'
+description: 'Stream over Secure Reliable Transport (SRT) using the SrtStream class, with built-in encryption and packet resending.'
+keywords: ['srt', 'secure reliable transport', 'streaming', 'android', 'rootencoder']
+---
+
+<Warning>
+  SRT support in RootEncoder is in beta. The API is functional but may change in future releases.
+</Warning>
+
+`SrtStream` streams over the [Secure Reliable Transport](https://www.haivision.com/products/srt-secure-reliable-transport/) protocol. SRT provides automatic packet resending and optional AES encryption at the transport layer, making it well-suited for unreliable network paths.
+
+## Supported codecs
+
+<CardGroup cols={2}>
+  <Card title="Video" icon="video">
+    H264, H265
+  </Card>
+  <Card title="Audio" icon="microphone">
+    AAC, OPUS
+  </Card>
+</CardGroup>
+
+## Basic usage
+
+<Steps>
+  <Step title="Implement ConnectChecker">
+    ```kotlin
+    class MainActivity : AppCompatActivity(), ConnectChecker {
+
+      override fun onConnectionStarted(url: String) {}
+      override fun onConnectionSuccess() { /* stream is live */ }
+      override fun onConnectionFailed(reason: String) { /* handle failure */ }
+      override fun onDisconnect() {}
+      override fun onAuthError() {}
+      override fun onAuthSuccess() {}
+    }
+    ```
+  </Step>
+
+  <Step title="Create SrtStream">
+    The default constructor uses `Camera2Source` and `MicrophoneSource`.
+
+    ```kotlin
+    val srtStream = SrtStream(context, connectChecker)
+    ```
+
+    Supply custom sources via the full constructor:
+
+    ```kotlin
+    val srtStream = SrtStream(
+      context = this,
+      connectChecker = this,
+      videoSource = Camera2Source(context),
+      audioSource = MicrophoneSource()
+    )
+    ```
+  </Step>
+
+  <Step title="Prepare video and audio">
+    ```kotlin
+    val prepared = srtStream.prepareVideo(
+      width = 1280,
+      height = 720,
+      bitrate = 1_200_000
+    ) && srtStream.prepareAudio(
+      sampleRate = 44100,
+      isStereo = true,
+      bitrate = 128_000
+    )
+    ```
+  </Step>
+
+  <Step title="Start and stop the stream">
+    ```kotlin
+    srtStream.startStream("srt://your-server:9999")
+
+    srtStream.stopStream()
+    ```
+  </Step>
+</Steps>
+
+## Encryption
+
+SRT supports AES encryption with 128-bit, 192-bit, and 256-bit keys using `EncryptionType.AES128`, `AES192`, or `AES256`. Set a passphrase and key length before calling `startStream`:
+
+```kotlin
+import com.pedro.srt.srt.packets.control.handshake.EncryptionType
+
+val client = srtStream.getStreamClient()
+
+// AES-128
+client.setPassphrase("your-passphrase", EncryptionType.AES128)
+
+// AES-192
+client.setPassphrase("your-passphrase", EncryptionType.AES192)
+
+// AES-256
+client.setPassphrase("your-passphrase", EncryptionType.AES256)
+
+// Disable encryption
+client.setPassphrase("", EncryptionType.NONE)
+```
+
+<Tip>
+  The passphrase must match on both the sender and receiver. Mismatched passphrases cause the connection to fail silently.
+</Tip>
+
+## Latency
+
+SRT buffers packets at the receiver to absorb jitter and allow retransmission. The default latency is 120,000 microseconds (120 ms). Adjust it to match your network conditions:
+
+```kotlin
+// Set latency in microseconds (Int); must be called before startStream
+srtStream.getStreamClient().setLatency(200_000) // 200 ms
+```
+
+Lower values reduce end-to-end delay but leave less room for packet recovery on lossy networks.
+
+## Packet loss monitoring
+
+SRT uses NAK (Negative Acknowledgement) commands to request retransmission of lost packets. You can monitor loss and RTT:
+
+```kotlin
+val client = srtStream.getStreamClient()
+
+// RTT in microseconds, reported by ACK commands
+val rttMicros = client.getRtt()
+
+// Cumulative count of NAK commands received (increments with each loss event)
+val packetsLost = client.getPacketsLost()
+```
+
+## Retry on failure
+
+```kotlin
+override fun onConnectionFailed(reason: String) {
+  val retrying = srtStream.getStreamClient().reTry(5000L, reason)
+  if (!retrying) {
+    srtStream.stopStream()
+  }
+}
+```
+
+Set the maximum number of retry attempts:
+
+```kotlin
+srtStream.getStreamClient().setReTries(5)
+```
+
+Pass a backup URL to fail over:
+
+```kotlin
+srtStream.getStreamClient().reTry(5000L, reason, "srt://backup-server:9999")
+```
+
+## Cache management
+
+```kotlin
+val client = srtStream.getStreamClient()
+
+// Check for congestion (default 20% threshold)
+val congested = client.hasCongestion()
+
+// Resize the packet cache in bytes
+client.resizeCache(64 * 1024 * 1024)
+
+// Discard all queued packets
+client.clearCache()
+```
+
+## Custom MPEG-TS service
+
+SRT carries media in MPEG-TS containers. You can provide a custom `Mpeg2TsService` if you need non-default PMT/PAT configuration. Call this before connecting:
+
+```kotlin
+import com.pedro.srt.mpeg2ts.service.Mpeg2TsService
+
+srtStream.getStreamClient().setMpeg2TsService(myCustomService)
+```

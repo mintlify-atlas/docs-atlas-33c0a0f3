@@ -1,0 +1,283 @@
+---
+title: "Extra Sources"
+description: "Use CameraX, USB (UVC), and Media3/ExoPlayer as video and audio sources in your streams."
+---
+
+The `extra-sources` module provides optional video and audio sources that go beyond the built-in Camera1, Camera2, and microphone sources. These sources are distributed as a separate Gradle artifact so that you only pull in the dependencies you actually need.
+
+## Gradle dependency
+
+Add the `extra-sources` artifact to your module's `build.gradle`:
+
+```gradle
+dependencies {
+    implementation "com.github.pedroSG94.RootEncoder:extra-sources:2.7.2"
+}
+```
+
+<Note>
+All sources in this module require **API 21 (Android 5.0 Lollipop)** or higher, matching the minimum API level of the core RootEncoder library.
+</Note>
+
+---
+
+## CameraXSource
+
+`CameraXSource` wraps the [Jetpack CameraX](https://developer.android.com/training/camerax) library. It implements the same `VideoSource` interface as the built-in camera sources, so you can pass it directly to `GenericStream` or swap it in at runtime with `changeVideoSource()`.
+
+**When to prefer CameraX over Camera2:**
+- You need broader device compatibility through CameraX's camera2 interop layer.
+- You want lifecycle-aware camera management without manual surface lifecycle handling.
+- You need access to camera features such as tap-to-focus, zoom, lantern, and auto-exposure through a unified API.
+
+### Setup
+
+<Steps>
+  <Step title="Create the source">
+    Instantiate `CameraXSource` with your `Context`. CameraX resolves the best available resolution automatically, or you can pin an exact size with `setRequiredResolution()`.
+
+    ```kotlin
+    import com.pedro.extrasources.CameraXSource
+
+    val cameraXSource = CameraXSource(context)
+    // Optional: pin a specific resolution before prepareVideo
+    // cameraXSource.setRequiredResolution(Size(1280, 720))
+    ```
+  </Step>
+  <Step title="Pass it to GenericStream">
+    Provide the source when constructing your stream object, then call `prepareVideo` as normal.
+
+    ```kotlin
+    import com.pedro.encoder.input.sources.audio.MicrophoneSource
+    import com.pedro.library.generic.GenericStream
+
+    val genericStream = GenericStream(context, connectChecker, cameraXSource, MicrophoneSource())
+
+    genericStream.prepareVideo(
+        width = 1280,
+        height = 720,
+        bitrate = 2_000_000,
+        fps = 30,
+        rotation = 0
+    )
+    genericStream.prepareAudio(sampleRate = 44100, isStereo = true, bitrate = 128_000)
+    ```
+  </Step>
+  <Step title="Start preview and stream">
+    ```kotlin
+    genericStream.startPreview(surfaceView)
+    genericStream.startStream("rtmp://your-server/live/stream-key")
+    ```
+  </Step>
+</Steps>
+
+### Switching cameras
+
+Call `switchCamera()` directly on the `CameraXSource` instance to toggle between the front and back lens. This works at any time while the source is running — no need to stop the stream.
+
+```kotlin
+val source = genericStream.videoSource as? CameraXSource
+source?.switchCamera()
+```
+
+To open a specific camera by its `CameraInfo` (for example a secondary rear camera), use `openCamera()`:
+
+```kotlin
+// Obtain CameraInfo list from ProcessCameraProvider
+source?.openCamera(specificCameraInfo)
+```
+
+### Switching from Camera2 to CameraX on the fly
+
+You can swap the running video source without interrupting an active stream or preview. Call `changeVideoSource()` after `prepareVideo()` has already been called:
+
+```kotlin
+// Initially using Camera2
+val genericStream = GenericStream(context, connectChecker, Camera2Source(context), MicrophoneSource())
+genericStream.prepareVideo(1280, 720, 2_000_000)
+
+// Later — switch to CameraX seamlessly
+val cameraXSource = CameraXSource(context)
+genericStream.changeVideoSource(cameraXSource)
+```
+
+### Additional CameraXSource APIs
+
+| Method | Description |
+|---|---|
+| `switchCamera()` | Toggle front / back lens |
+| `openCamera(info: CameraInfo)` | Open a specific camera by its `CameraInfo` |
+| `setZoom(level: Float)` | Set zoom ratio directly |
+| `setZoom(event: MotionEvent, delta: Float)` | Pinch-to-zoom via touch events |
+| `getZoomRange(): Range<Float>` | Get min/max zoom ratios |
+| `enableAutoFocus(): Boolean` | Enable continuous auto-focus |
+| `tapToFocus(view, event): Boolean` | Focus on a touch point |
+| `enableLantern()` / `disableLantern()` | Toggle the torch |
+| `setExposure(level: Int)` | Set exposure compensation index |
+| `enableAutoExposure(): Boolean` | Enable auto-exposure metering |
+| `enableAutoWhiteBalance(): Boolean` | Enable auto white-balance |
+| `setRequiredResolution(size: Size?)` | Pin a resolution before `prepareVideo` |
+| `getCameraResolutions(facing)` | List resolutions for a facing direction |
+| `getCameraFacing()` | Returns the current `CameraSelector` lens facing constant |
+
+---
+
+## CameraUvcSource
+
+`CameraUvcSource` enables streaming from a **USB UVC camera** connected to the device via OTG. It uses the [UVCCamera](https://github.com/herohan/UVCCamera) library under the hood.
+
+<Warning>
+USB Host mode and OTG support are required on the device. Grant the `android.permission.USB_PERMISSION` at runtime before the source starts.
+</Warning>
+
+### Setup
+
+<Steps>
+  <Step title="Declare USB permission in your manifest">
+    ```xml
+    <uses-feature android:name="android.hardware.usb.host" />
+    ```
+  </Step>
+  <Step title="Create the source and pass it to GenericStream">
+    `CameraUvcSource` does not accept constructor arguments. It automatically handles USB device attachment events through an internal `ICameraHelper.StateCallback`.
+
+    ```kotlin
+    import com.pedro.extrasources.CameraUvcSource
+
+    val uvcSource = CameraUvcSource()
+    val genericStream = GenericStream(context, connectChecker, uvcSource, MicrophoneSource())
+    ```
+  </Step>
+  <Step title="Prepare and start">
+    ```kotlin
+    genericStream.prepareVideo(
+        width = 640,
+        height = 480,
+        bitrate = 1_200_000,
+        fps = 30,
+        rotation = 0
+    )
+    genericStream.prepareAudio(sampleRate = 44100, isStereo = true, bitrate = 128_000)
+
+    // Start preview if your UI has a SurfaceView
+    genericStream.startPreview(surfaceView)
+    genericStream.startStream("rtmp://your-server/live/stream-key")
+    ```
+
+    The source listens for USB attach events internally. When a UVC device is connected and the OS grants permission, the camera opens and begins feeding frames automatically.
+  </Step>
+</Steps>
+
+<Note>
+`CameraUvcSource` forces **landscape orientation** via `OrientationConfig(forced = OrientationForced.LANDSCAPE)` because most USB cameras produce landscape frames natively.
+</Note>
+
+---
+
+## Media3VideoSource and Media3AudioSource
+
+`Media3VideoSource` and `Media3AudioSource` let you stream from a **local or remote media file** using the [Jetpack Media3 / ExoPlayer](https://developer.android.com/media/media3) engine. This is useful for re-streaming pre-recorded content or looping a video file.
+
+### Gradle dependency
+
+Media3 sources rely on the ExoPlayer engine included in Media3. Add the following dependency alongside the `extra-sources` artifact:
+
+```gradle
+dependencies {
+    implementation "com.github.pedroSG94.RootEncoder:extra-sources:2.7.2"
+    // Media3 ExoPlayer is a transitive dependency of extra-sources,
+    // but you can pin a version explicitly:
+    implementation "androidx.media3:media3-exoplayer:1.x.x"
+}
+```
+
+### Streaming from a file
+
+<Steps>
+  <Step title="Obtain a Uri for your media file">
+    ```kotlin
+    import android.net.Uri
+    import java.io.File
+
+    val videoUri = Uri.fromFile(File(context.filesDir, "clip.mp4"))
+    ```
+  </Step>
+  <Step title="Create paired video and audio sources">
+    Both sources accept the same `Uri`. Construct them with matching `sampleRate` and `isStereo` values that you will pass to `prepareAudio()`.
+
+    ```kotlin
+    import com.pedro.extrasources.Media3VideoSource
+    import com.pedro.extrasources.Media3AudioSource
+
+    val videoSource = Media3VideoSource(
+        context = context,
+        path = videoUri,
+        speed = 1f,          // playback speed multiplier
+        loopMode = true,     // loop the file indefinitely
+        onFinish = { isLoop -> /* called when playback ends */ }
+    )
+
+    val audioSource = Media3AudioSource(
+        context = context,
+        path = videoUri,
+        speed = 1f,
+        loopMode = true,
+        onFinish = { isLoop -> /* called when playback ends */ }
+    )
+    ```
+  </Step>
+  <Step title="Pass sources to GenericStream">
+    ```kotlin
+    val genericStream = GenericStream(context, connectChecker, videoSource, audioSource)
+    ```
+  </Step>
+  <Step title="Prepare and start">
+    The `sampleRate` and `isStereo` values you pass to `prepareAudio()` **must match** the audio track in your file. `Media3AudioSource` throws `IllegalArgumentException` if they differ.
+
+    ```kotlin
+    genericStream.prepareVideo(
+        width = 1280,
+        height = 720,
+        bitrate = 2_000_000,
+        fps = 30,
+        rotation = 0
+    )
+    // Match these to your file's audio track
+    genericStream.prepareAudio(sampleRate = 44100, isStereo = true, bitrate = 128_000)
+
+    genericStream.startStream("rtmp://your-server/live/stream-key")
+    ```
+  </Step>
+</Steps>
+
+### Accessing the ExoPlayer instance
+
+Both sources expose `getPlayer()` so you can control playback directly:
+
+```kotlin
+val player = videoSource.getPlayer()
+player?.seekTo(30_000L)  // seek to 30 seconds
+player?.pause()
+player?.play()
+```
+
+<Note>
+`Media3VideoSource` and `Media3AudioSource` also force **landscape orientation** (`OrientationForced.LANDSCAPE`) because media files typically contain landscape-encoded video. If your content is portrait, override the orientation after calling `prepareVideo()` using `getGlInterface().forceOrientation(OrientationForced.PORTRAIT)`.
+</Note>
+
+### Source comparison
+
+<CardGroup cols={2}>
+  <Card title="CameraXSource" icon="camera">
+    Best for apps that need lifecycle-aware camera management, advanced camera controls (zoom, focus, torch), or support for secondary camera lenses. Requires API 21+.
+  </Card>
+  <Card title="CameraUvcSource" icon="usb">
+    Best for kiosk or production setups using an external USB camera via OTG. Requires USB Host mode. Requires API 21+.
+  </Card>
+  <Card title="Media3VideoSource" icon="film">
+    Best for re-streaming or looping a local/remote video file. Pairs with `Media3AudioSource`. Requires API 21+.
+  </Card>
+  <Card title="Media3AudioSource" icon="music">
+    Replaces the microphone with audio decoded from a media file. Must be paired with `Media3VideoSource` when streaming a file. Requires API 21+.
+  </Card>
+</CardGroup>

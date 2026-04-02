@@ -1,0 +1,206 @@
+---
+title: 'Generic Stream'
+description: 'Use GenericStream to stream to any supported endpoint — it automatically selects the right protocol based on the URL scheme.'
+keywords: ['generic stream', 'rtmp', 'rtsp', 'srt', 'udp', 'android', 'rootencoder']
+---
+
+`GenericStream` is the recommended class for most applications. It inspects the URL scheme at runtime and routes to the correct underlying client — you write one integration and support every protocol.
+
+| URL scheme | Protocol used |
+|------------|--------------|
+| `rtmp://`, `rtmps://`, `rtmpt://`, `rtmpts://` | RTMP |
+| `rtsp://`, `rtsps://` | RTSP |
+| `srt://` | SRT |
+| `udp://` | UDP |
+
+<Tip>
+  Use `GenericStream` unless you need a protocol-specific feature that is not exposed through `GenericStreamClient`. For protocol-specific features access the underlying client via `getStreamClient()`.
+</Tip>
+
+## Codec constraints
+
+`GenericStream` enforces a common subset of codecs that all four protocols support:
+
+- **Video:** H264, H265
+- **Audio:** AAC
+
+Attempting to configure `AV1`, `G711`, or `OPUS` on a `GenericStream` throws an `IllegalArgumentException`. Use the protocol-specific stream classes if you need those codecs.
+
+## Basic usage
+
+<Steps>
+  <Step title="Implement ConnectChecker">
+    ```kotlin
+    class MainActivity : AppCompatActivity(), ConnectChecker {
+
+      override fun onConnectionStarted(url: String) {}
+      override fun onConnectionSuccess() { /* stream is live */ }
+      override fun onConnectionFailed(reason: String) { /* handle failure or retry */ }
+      override fun onDisconnect() {}
+      override fun onAuthError() {}
+      override fun onAuthSuccess() {}
+    }
+    ```
+  </Step>
+
+  <Step title="Create GenericStream">
+    The default constructor uses `Camera2Source` and `MicrophoneSource`.
+
+    ```kotlin
+    val genericStream = GenericStream(context, connectChecker)
+    ```
+
+    Supply custom sources via the full constructor:
+
+    ```kotlin
+    val genericStream = GenericStream(
+      context = this,
+      connectChecker = this,
+      videoSource = Camera2Source(context),
+      audioSource = MicrophoneSource()
+    )
+    ```
+
+    Enable automatic orientation handling for the GL preview:
+
+    ```kotlin
+    genericStream.getGlInterface().autoHandleOrientation = true
+    ```
+  </Step>
+
+  <Step title="Prepare video and audio">
+    ```kotlin
+    val prepared = genericStream.prepareVideo(
+      width = 1280,
+      height = 720,
+      bitrate = 1_200_000
+    ) && genericStream.prepareAudio(
+      sampleRate = 44100,
+      isStereo = true,
+      bitrate = 128_000
+    )
+
+    if (!prepared) {
+      // Handle configuration failure
+    }
+    ```
+  </Step>
+
+  <Step title="Start streaming">
+    Pass any supported URL — `GenericStream` picks the protocol automatically:
+
+    ```kotlin
+    // RTMP
+    genericStream.startStream("rtmp://live.example.com/app/stream-key")
+
+    // RTMPS
+    genericStream.startStream("rtmps://live.example.com/app/stream-key")
+
+    // RTSP
+    genericStream.startStream("rtsp://live.example.com:1935/live/stream-key")
+
+    // SRT
+    genericStream.startStream("srt://live.example.com:9999")
+
+    // UDP
+    genericStream.startStream("udp://192.168.1.100:1234")
+    ```
+  </Step>
+
+  <Step title="Stop streaming">
+    ```kotlin
+    genericStream.stopStream()
+    ```
+  </Step>
+</Steps>
+
+## Full example (based on CameraFragment)
+
+The following shows a complete Fragment that uses `GenericStream` with automatic retry and bitrate adaptation. This mirrors the pattern used in the official sample app.
+
+```kotlin
+@RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+class CameraFragment : Fragment(), ConnectChecker {
+
+  private val genericStream: GenericStream by lazy {
+    GenericStream(requireContext(), this).apply {
+      getGlInterface().autoHandleOrientation = true
+    }
+  }
+
+  private val bitrateAdapter = BitrateAdapter { bitrate ->
+    genericStream.setVideoBitrateOnFly(bitrate)
+  }.apply {
+    setMaxBitrate(1_200_000 + 128_000)
+  }
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+
+    val prepared = genericStream.prepareVideo(640, 480, 1_200_000) &&
+        genericStream.prepareAudio(32000, isStereo = true, 128_000)
+
+    if (!prepared) return
+
+    // Allow up to 10 automatic retries before giving up
+    genericStream.getStreamClient().setReTries(10)
+  }
+
+  fun startStream(url: String) {
+    genericStream.startStream(url)
+  }
+
+  fun stopStream() {
+    genericStream.stopStream()
+  }
+
+  override fun onConnectionFailed(reason: String) {
+    // Retry with 5-second delay; fall back to stopStream if retries are exhausted
+    if (!genericStream.getStreamClient().reTry(5000L, reason, null)) {
+      genericStream.stopStream()
+    }
+  }
+
+  override fun onNewBitrate(bitrate: Long) {
+    bitrateAdapter.adaptBitrate(bitrate, genericStream.getStreamClient().hasCongestion())
+  }
+
+  override fun onConnectionStarted(url: String) {}
+  override fun onConnectionSuccess() {}
+  override fun onDisconnect() {}
+  override fun onAuthError() { genericStream.stopStream() }
+  override fun onAuthSuccess() {}
+
+  override fun onDestroy() {
+    super.onDestroy()
+    genericStream.release()
+  }
+}
+```
+
+## Switching protocols at runtime
+
+Stop the current stream and start a new one with a different URL scheme. No re-configuration is needed between calls.
+
+```kotlin
+// Currently streaming over RTMP
+genericStream.stopStream()
+
+// Now stream over SRT
+genericStream.startStream("srt://backup-server:9999")
+```
+
+## Accessing protocol-specific features
+
+`getStreamClient()` returns a `GenericStreamClient` that delegates to the active protocol client. For features not exposed on `GenericStreamClient`, you can check the active protocol at runtime and cast accordingly:
+
+```kotlin
+// Example: set RTSP transport before connecting
+val client = genericStream.getStreamClient()
+
+// GenericStreamClient exposes shared methods like setReTries, hasCongestion, etc.
+client.setReTries(5)
+client.setAuthorization("user", "password")
+```
+
+For protocol-specific configuration (e.g., `setWriteChunkSize` for RTMP or `setPassphrase` for SRT), use the protocol-dedicated stream class (`RtmpStream`, `SrtStream`, etc.) instead.

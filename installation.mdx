@@ -1,0 +1,130 @@
+---
+title: "Installation"
+description: "Add RootEncoder to your Android project using Gradle and JitPack."
+---
+
+RootEncoder is distributed through [JitPack](https://jitpack.io). You need to add the JitPack repository and then declare the library as a dependency.
+
+<Note>
+  JitPack requires the `allprojects` repository block to be present in your project-level `build.gradle`. Newer Android projects using `dependencyResolutionManagement` in `settings.gradle` should add JitPack there instead.
+</Note>
+
+## Add the JitPack repository
+
+<CodeGroup>
+
+```groovy Groovy (build.gradle)
+allprojects {
+  repositories {
+    maven { url 'https://jitpack.io' }
+  }
+}
+```
+
+```kotlin Kotlin DSL (settings.gradle.kts)
+dependencyResolutionManagement {
+  repositories {
+    maven("https://jitpack.io")
+  }
+}
+```
+
+</CodeGroup>
+
+## Add the dependency
+
+<CodeGroup>
+
+```groovy Groovy (build.gradle)
+dependencies {
+  implementation "com.github.pedroSG94.RootEncoder:library:2.7.2"
+}
+```
+
+```kotlin Kotlin DSL (build.gradle.kts)
+dependencies {
+  implementation("com.github.pedroSG94.RootEncoder:library:2.7.2")
+}
+```
+
+</CodeGroup>
+
+## Optional: extra-sources module
+
+The `extra-sources` module provides `CameraXSource` and `CameraUvcSource` for CameraX and UVC USB camera support. Add it if you need either of these video sources.
+
+<CodeGroup>
+
+```groovy Groovy (build.gradle)
+dependencies {
+  implementation "com.github.pedroSG94.RootEncoder:library:2.7.2"
+  implementation "com.github.pedroSG94.RootEncoder:extra-sources:2.7.2"
+}
+```
+
+```kotlin Kotlin DSL (build.gradle.kts)
+dependencies {
+  implementation("com.github.pedroSG94.RootEncoder:library:2.7.2")
+  implementation("com.github.pedroSG94.RootEncoder:extra-sources:2.7.2")
+}
+```
+
+</CodeGroup>
+
+## AndroidManifest.xml permissions
+
+Add the following permissions to your `AndroidManifest.xml`:
+
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.RECORD_AUDIO" />
+<uses-permission android:name="android.permission.CAMERA" />
+```
+
+`RECORD_AUDIO` and `CAMERA` are runtime permissions on API 23+. Your app must request them from the user at runtime before starting a stream.
+
+## Minimum SDK requirements
+
+| Feature | Min API |
+|---|---|
+| Core library, Camera1/Camera2, basic streaming | 16 |
+| `StreamBase`, `GenericStream`, and all modern stream classes | 21 |
+| `extra-sources` (CameraX, UVC camera, `BitmapSource`) | 21 |
+| Record to MP4 while streaming | 18 |
+| Change video bitrate on the fly | 19 |
+| Screen capture source | 21 |
+
+## Available modules
+
+The `library` module is the recommended dependency for most apps — it bundles all protocol and encoder modules. You can depend on individual protocol modules directly if you want to keep your app smaller and only support one protocol.
+
+| Module | Artifact ID | Description |
+|---|---|---|
+| `library` | `library` | Main module. Includes all protocols and the `StreamBase` hierarchy. |
+| `encoder` | `encoder` | Video/audio encoders, camera sources, and OpenGL rendering. |
+| `rtmp` | `rtmp` | RTMP, RTMPS, RTMPT client with enhanced RTMP for H265/AV1. |
+| `rtsp` | `rtsp` | RTSP/RTSPS client with TCP/UDP transport and digest auth. |
+| `srt` | `srt` | SRT client with retransmission and AES encryption. |
+| `udp` | `udp` | UDP client with MPEG2-TS and multicast/broadcast support. |
+| `common` | `common` | Shared interfaces including `ConnectChecker`. |
+| `extra-sources` | `extra-sources` | CameraX and UVC camera sources (separate optional dependency). |
+
+<Accordion title="Old API dependency (version 2.2.6 and below)">
+
+If you are using version 2.2.6 or earlier, the artifact ID was different. Use the `rtplibrary` artifact instead of `library`:
+
+```groovy
+allprojects {
+  repositories {
+    maven { url 'https://jitpack.io' }
+  }
+}
+
+dependencies {
+  implementation 'com.github.pedroSG94.RootEncoder:rtplibrary:2.2.6'
+}
+```
+
+This applies to all versions at or before 2.2.6. The library was renamed from `rtmp-rtsp-stream-client-java` to RootEncoder when SRT support was added, and the artifact ID changed at the same time.
+
+</Accordion>
